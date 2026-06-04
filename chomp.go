@@ -252,6 +252,18 @@ func (result Result) Positional(index int) string {
 
 // Usage returns stable plain-text usage for the command.
 func (spec *Spec) Usage() string {
+	return spec.usage(0)
+}
+
+// UsageWidth returns stable plain-text usage with descriptions wrapped to width.
+func (spec *Spec) UsageWidth(width int) string {
+	if width <= 0 {
+		return spec.Usage()
+	}
+	return spec.usage(width)
+}
+
+func (spec *Spec) usage(width int) string {
 	name := spec.name()
 	positionals := spec.positionalPlaceholders()
 
@@ -282,10 +294,35 @@ func (spec *Spec) Usage() string {
 		widest = width
 	}
 
+	const (
+		minimumAlignedDescriptionWidth = 20
+		stackedDescriptionIndent       = 4
+	)
+	descriptionColumn := 2 + widest + 2
+	stackDescriptions := width > 0 && width-descriptionColumn < minimumAlignedDescriptionWidth
+
 	for _, row := range rows {
 		builder.WriteString("  " + row.display)
-		if row.description != "" {
+		if row.description == "" || (width > 0 && len(strings.Fields(row.description)) == 0) {
+			builder.WriteByte('\n')
+			continue
+		}
+
+		switch {
+		case width <= 0:
 			fmt.Fprintf(&builder, "%*s  %s", widest-utf8.RuneCountInString(row.display), "", row.description)
+		case stackDescriptions:
+			builder.WriteByte('\n')
+			for _, line := range wrapText(row.description, width-stackedDescriptionIndent) {
+				fmt.Fprintf(&builder, "%*s%s\n", stackedDescriptionIndent, "", line)
+			}
+			continue
+		default:
+			lines := wrapText(row.description, width-descriptionColumn)
+			fmt.Fprintf(&builder, "%*s  %s", widest-utf8.RuneCountInString(row.display), "", lines[0])
+			for _, line := range lines[1:] {
+				fmt.Fprintf(&builder, "\n%*s%s", descriptionColumn, "", line)
+			}
 		}
 		builder.WriteByte('\n')
 	}
@@ -485,6 +522,29 @@ func valueLabel(name string) string {
 		return name
 	}
 	return "<" + name + ">"
+}
+
+func wrapText(text string, width int) []string {
+	if width < 1 {
+		width = 1
+	}
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return []string{text}
+	}
+
+	lines := make([]string, 0, len(words))
+	line := words[0]
+	for _, word := range words[1:] {
+		candidate := line + " " + word
+		if utf8.RuneCountInString(candidate) <= width {
+			line = candidate
+			continue
+		}
+		lines = append(lines, line)
+		line = word
+	}
+	return append(lines, line)
 }
 
 func commandPath(parts ...string) string {

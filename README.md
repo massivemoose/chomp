@@ -78,6 +78,10 @@ the parser independent from process-global state is useful.
 Long bool flags accept separated values such as `--verbose false`. Short bool
 flags use `-v` or `-v=false`; a following argument remains positional.
 
+`Usage()` returns stable unwrapped text. Use `UsageWidth(width)` to wrap flag
+descriptions to an explicit width while keeping output independent from the
+terminal environment.
+
 ## Scope
 
 Chomp v0.1 focuses on parser and usage rendering:
