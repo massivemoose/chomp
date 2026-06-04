@@ -3,6 +3,7 @@ package chomp
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"unicode/utf8"
 )
@@ -195,6 +196,15 @@ func (spec *Spec) Parse(args []string) (Result, error) {
 		}
 	}
 	return result, nil
+}
+
+// ParseCommandLine parses the current process arguments after the executable name.
+func (spec *Spec) ParseCommandLine() (Result, error) {
+	args := os.Args
+	if len(args) > 0 {
+		args = args[1:]
+	}
+	return spec.Parse(args)
 }
 
 // String returns a parsed string flag value.

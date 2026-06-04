@@ -41,7 +41,7 @@ func main() {
 		).
 		Positionals(1, 1, "input")
 
-	result, err := spec.Parse(os.Args[1:])
+	result, err := spec.ParseCommandLine()
 	if errors.Is(err, chomp.ErrHelp) {
 		fmt.Print(spec.Usage())
 		return
@@ -70,6 +70,10 @@ report --help
 Defaults are returned as parsed values, while `Result.IsSet` reports whether
 the user explicitly supplied a flag. Required flags are presence-based, so an
 explicit empty string or explicit false bool still satisfies `Required()`.
+
+`ParseCommandLine` parses the current process arguments after the executable
+name. Use `Parse(args)` when arguments come from another source or when keeping
+the parser independent from process-global state is useful.
 
 Long bool flags accept separated values such as `--verbose false`. Short bool
 flags use `-v` or `-v=false`; a following argument remains positional.

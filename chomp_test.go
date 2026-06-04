@@ -2,6 +2,7 @@ package chomp
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -123,6 +124,69 @@ func TestParseReturnsHelpError(t *testing.T) {
 		if !errors.Is(err, ErrHelp) {
 			t.Fatalf("expected ErrHelp for %#v, got %v", args, err)
 		}
+	}
+}
+
+func TestParseCommandLineSkipsExecutableNameAndParsesArguments(t *testing.T) {
+	originalArgs := os.Args
+	t.Cleanup(func() {
+		os.Args = originalArgs
+	})
+	os.Args = []string{"custom-executable", "--format=json", "input.csv"}
+
+	result, err := New("report").
+		String("format").
+		Positionals(1, 1, "input").
+		ParseCommandLine()
+	if err != nil {
+		t.Fatalf("expected parse to succeed, got %v", err)
+	}
+	if got := result.String("format"); got != "json" {
+		t.Fatalf("expected parsed format, got %q", got)
+	}
+	if got := result.Positional(0); got != "input.csv" {
+		t.Fatalf("expected parsed positional, got %q", got)
+	}
+}
+
+func TestParseCommandLineHandlesEmptyArgs(t *testing.T) {
+	originalArgs := os.Args
+	t.Cleanup(func() {
+		os.Args = originalArgs
+	})
+	os.Args = nil
+
+	result, err := New("report").ParseCommandLine()
+	if err != nil {
+		t.Fatalf("expected parse to succeed, got %v", err)
+	}
+	if got := result.Positionals(); len(got) != 0 {
+		t.Fatalf("expected no positionals, got %#v", got)
+	}
+}
+
+func TestParseCommandLinePreservesParseErrors(t *testing.T) {
+	originalArgs := os.Args
+	t.Cleanup(func() {
+		os.Args = originalArgs
+	})
+
+	os.Args = []string{"report", "--help"}
+	_, err := New("report").ParseCommandLine()
+	if !errors.Is(err, ErrHelp) {
+		t.Fatalf("expected ErrHelp, got %v", err)
+	}
+
+	os.Args = []string{"report"}
+	_, err = New("report").String("").ParseCommandLine()
+	if err == nil || err.Error() != "flag name cannot be empty" {
+		t.Fatalf("expected validation error, got %v", err)
+	}
+
+	os.Args = []string{"custom-executable", "--wat"}
+	_, err = New("report").ParseCommandLine()
+	if err == nil || err.Error() != `unknown report flag "--wat"` {
+		t.Fatalf("expected spec command in parse error, got %v", err)
 	}
 }
 
