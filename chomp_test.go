@@ -2,6 +2,7 @@ package chomp
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -78,6 +79,109 @@ Flags:
 	}
 }
 
+func TestUsageWidthWrapsAlignedDescriptionsAndDefaults(t *testing.T) {
+	spec := New("tool").
+		String("output",
+			Short('o'),
+			Description("write generated report to output path"),
+			Default("report.json"),
+		)
+
+	const want = `Usage: tool [flags]
+
+Flags:
+  -o, --output <value>  write generated report
+                        to output path (default
+                        "report.json")
+  -h, --help            show help
+`
+	if got := spec.UsageWidth(48); got != want {
+		t.Fatalf("unexpected width-aware usage:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestUsageWidthStacksDescriptionsWhenAlignedColumnIsCramped(t *testing.T) {
+	spec := New("tool").
+		Bool("verbose", Short('v'), Description("show extra diagnostic detail"))
+
+	const want = `Usage: tool [flags]
+
+Flags:
+  -v, --verbose
+    show extra diagnostic
+    detail
+  -h, --help
+    show help
+`
+	if got := spec.UsageWidth(30); got != want {
+		t.Fatalf("unexpected stacked usage:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestUsageWidthKeepsDescriptionsAlignedAtMinimumRoom(t *testing.T) {
+	spec := New("tool").
+		Bool("verbose", Short('v'), Description("show extra diagnostic detail"))
+
+	const want = `Usage: tool [flags]
+
+Flags:
+  -v, --verbose  show extra
+                 diagnostic detail
+  -h, --help     show help
+`
+	if got := spec.UsageWidth(37); got != want {
+		t.Fatalf("unexpected boundary-width usage:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestUsageWidthNormalizesWhitespaceOnlyDescriptions(t *testing.T) {
+	spec := New("tool").
+		Bool("verbose", Description(" \n\t "))
+
+	const want = `Usage: tool [flags]
+
+Flags:
+      --verbose
+  -h, --help
+    show help
+`
+	if got := spec.UsageWidth(24); got != want {
+		t.Fatalf("unexpected whitespace-only description usage:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestUsageWidthUsesRuneCountsAndDoesNotSplitLongWords(t *testing.T) {
+	spec := New("tool").
+		Bool("mode", Description("éééé éééé next")).
+		Bool("verbose", Description("supercalifragilisticexpialidocious details"))
+
+	const want = `Usage: tool [flags]
+
+Flags:
+      --mode
+    éééé éééé next
+      --verbose
+    supercalifragilisticexpialidocious
+    details
+  -h, --help
+    show help
+`
+	if got := spec.UsageWidth(24); got != want {
+		t.Fatalf("unexpected rune-aware usage:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestUsageWidthNonPositiveMatchesUsage(t *testing.T) {
+	spec := New("tool").
+		Bool("verbose", Description("show extra diagnostic detail"))
+
+	for _, width := range []int{0, -1} {
+		if got, want := spec.UsageWidth(width), spec.Usage(); got != want {
+			t.Fatalf("expected width %d to match Usage:\n%s\nwant:\n%s", width, got, want)
+		}
+	}
+}
+
 func TestValidateAcceptsValidDefinition(t *testing.T) {
 	err := New("tool").
 		String("output", Short('o'), Default(""), ValueName("path")).
@@ -123,6 +227,69 @@ func TestParseReturnsHelpError(t *testing.T) {
 		if !errors.Is(err, ErrHelp) {
 			t.Fatalf("expected ErrHelp for %#v, got %v", args, err)
 		}
+	}
+}
+
+func TestParseCommandLineSkipsExecutableNameAndParsesArguments(t *testing.T) {
+	originalArgs := os.Args
+	t.Cleanup(func() {
+		os.Args = originalArgs
+	})
+	os.Args = []string{"custom-executable", "--format=json", "input.csv"}
+
+	result, err := New("report").
+		String("format").
+		Positionals(1, 1, "input").
+		ParseCommandLine()
+	if err != nil {
+		t.Fatalf("expected parse to succeed, got %v", err)
+	}
+	if got := result.String("format"); got != "json" {
+		t.Fatalf("expected parsed format, got %q", got)
+	}
+	if got := result.Positional(0); got != "input.csv" {
+		t.Fatalf("expected parsed positional, got %q", got)
+	}
+}
+
+func TestParseCommandLineHandlesEmptyArgs(t *testing.T) {
+	originalArgs := os.Args
+	t.Cleanup(func() {
+		os.Args = originalArgs
+	})
+	os.Args = nil
+
+	result, err := New("report").ParseCommandLine()
+	if err != nil {
+		t.Fatalf("expected parse to succeed, got %v", err)
+	}
+	if got := result.Positionals(); len(got) != 0 {
+		t.Fatalf("expected no positionals, got %#v", got)
+	}
+}
+
+func TestParseCommandLinePreservesParseErrors(t *testing.T) {
+	originalArgs := os.Args
+	t.Cleanup(func() {
+		os.Args = originalArgs
+	})
+
+	os.Args = []string{"report", "--help"}
+	_, err := New("report").ParseCommandLine()
+	if !errors.Is(err, ErrHelp) {
+		t.Fatalf("expected ErrHelp, got %v", err)
+	}
+
+	os.Args = []string{"report"}
+	_, err = New("report").String("").ParseCommandLine()
+	if err == nil || err.Error() != "flag name cannot be empty" {
+		t.Fatalf("expected validation error, got %v", err)
+	}
+
+	os.Args = []string{"custom-executable", "--wat"}
+	_, err = New("report").ParseCommandLine()
+	if err == nil || err.Error() != `unknown report flag "--wat"` {
+		t.Fatalf("expected spec command in parse error, got %v", err)
 	}
 }
 
