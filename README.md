@@ -1,12 +1,12 @@
 # Chomp
 
 Chomp is a small, dependency-free Go package for parsing command flags and
-positionals and rendering readable usage text.
+positionals, routing commands, and rendering readable usage text.
 
 It supports string and bool flags, long and single-short forms, interspersed
-flags and positionals, defaults, required flags, `--`, and `--help`. Chomp
-intentionally does not provide command routing, shell completion, environment
-binding, or command execution.
+flags and positionals, defaults, required flags, `--`, `--help`, and explicit
+command routing. Chomp intentionally does not provide shell completion,
+environment binding, lifecycle hooks, or command execution.
 
 ## Install
 
@@ -82,18 +82,57 @@ flags use `-v` or `-v=false`; a following argument remains positional.
 descriptions to an explicit width while keeping output independent from the
 terminal environment.
 
+## Router
+
+Chomp includes a tiny router for CLIs that want explicit command structs
+without adopting a full framework:
+
+```go
+type StatusCommand struct{}
+
+func (StatusCommand) Name() string { return "status" }
+func (StatusCommand) Summary() string { return "Show project status" }
+func (StatusCommand) Run(ctx context.Context, args []string) error {
+	// Parse args and run command-specific behavior here.
+	return nil
+}
+func (StatusCommand) Usage(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "Usage:\n  tool status")
+}
+
+router := chomp.NewRouter("tool", "Project tool.", StatusCommand{})
+if err := router.Run(context.Background(), os.Args[1:]); err != nil {
+	if command, ok := chomp.UsageCommand(err); ok {
+		command.Usage(os.Stdout)
+		return
+	}
+	if errors.Is(err, chomp.ErrUsage) {
+		router.Usage(os.Stdout)
+		return
+	}
+	fmt.Fprintln(os.Stderr, err)
+	os.Exit(1)
+}
+```
+
+Routers dispatch to named commands, support `help <command>`, omit hidden
+commands from usage, and can be nested because a router itself satisfies the
+command interface. Each command still owns its own parsing and business logic.
+
 ## Scope
 
-Chomp v0.1 focuses on parser and usage rendering:
+Chomp focuses on parser, tiny router, and usage rendering:
 
 - string and bool flags;
 - long flags and single-short aliases;
 - required flags, descriptions, defaults, and value labels;
 - positional arity;
+- explicit command dispatch;
 - stable plain-text usage.
 
-Command routing, short clusters, aliases, shell completion, env/config
-binding, color, generated docs, and command execution are outside its scope.
+Short clusters, command aliases, shell completion, env/config binding, color,
+generated docs, lifecycle hooks, middleware, and command execution are outside
+its scope.
 
 ## License
 
