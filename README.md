@@ -146,6 +146,21 @@ Commands:
   inspect  Inspect an app
 ```
 
+Parents may also group generated usage output by implementing `UsageGroups`,
+while child commands opt into sections with `UsageGroup`. Groups are display
+metadata only; they do not affect dispatch or parsing.
+
+```go
+func (AppCommand) UsageGroups() []chomp.UsageGroup {
+	return []chomp.UsageGroup{
+		{Key: "workflow", Title: "Workflow"},
+		{Key: "admin", Title: "Admin"},
+	}
+}
+
+func (DeployCommand) UsageGroup() string { return "workflow" }
+```
+
 ## Scope
 
 Chomp focuses on parser, tiny router, and usage rendering:

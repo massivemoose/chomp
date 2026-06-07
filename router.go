@@ -25,6 +25,22 @@ type Subcommander interface {
 	Subcommands() []Command
 }
 
+// UsageGroup describes a generated usage section for child commands.
+type UsageGroup struct {
+	Key   string
+	Title string
+}
+
+// UsageGrouper marks a parent command as defining generated usage sections.
+type UsageGrouper interface {
+	UsageGroups() []UsageGroup
+}
+
+// UsageGroupedCommand marks a command as belonging to a generated usage section.
+type UsageGroupedCommand interface {
+	UsageGroup() string
+}
+
 // HiddenCommand marks a command as omitted from router usage.
 type HiddenCommand interface {
 	Hidden() bool
@@ -118,11 +134,21 @@ func WriteCommandUsage(w io.Writer, command Command, path []string) {
 		_, _ = fmt.Fprintf(w, "%s\n\n", summary)
 	}
 	_, _ = fmt.Fprintf(w, "Usage:\n  %s <command> [args...]\n\n", fullCommandName(path, command))
-	_, _ = fmt.Fprintf(w, "Commands:\n")
 
+	sections := usageSections(command, children)
 	width := commandNameWidth(children)
-	for _, child := range children {
-		_, _ = fmt.Fprintf(w, "  %-*s  %s\n", width, child.Name(), child.Summary())
+	for index, section := range sections {
+		if index > 0 {
+			_, _ = fmt.Fprintln(w)
+		}
+		title := "Commands"
+		if len(sections) > 1 && section.key != "" {
+			title = section.title
+		}
+		_, _ = fmt.Fprintf(w, "%s:\n", title)
+		for _, child := range section.commands {
+			_, _ = fmt.Fprintf(w, "  %-*s  %s\n", width, child.Name(), child.Summary())
+		}
 	}
 }
 
@@ -238,6 +264,98 @@ func commandNameWidth(commands []Command) int {
 		}
 	}
 	return width
+}
+
+type usageSection struct {
+	key      string
+	title    string
+	commands []Command
+}
+
+func usageSections(parent Command, visible []Command) []usageSection {
+	groups := usageGroupDefinitions(parent)
+	if len(groups) == 0 {
+		return []usageSection{{commands: visible}}
+	}
+
+	sections := make([]usageSection, 0, len(groups)+1)
+	sectionsByKey := make(map[string]int, len(groups)+1)
+	defaultListed := false
+	for _, group := range groups {
+		if group.Key == "" {
+			defaultListed = true
+			break
+		}
+	}
+	if !defaultListed {
+		sectionsByKey[""] = len(sections)
+		sections = append(sections, usageSection{})
+	}
+	for _, group := range groups {
+		if group.Key != "" {
+			if _, exists := sectionsByKey[group.Key]; exists {
+				panic(fmt.Sprintf("chomp: duplicate usage group %q", group.Key))
+			}
+		} else if _, exists := sectionsByKey[group.Key]; exists {
+			continue
+		}
+		title := group.Title
+		if title == "" {
+			title = group.Key
+		}
+		sectionsByKey[group.Key] = len(sections)
+		sections = append(sections, usageSection{key: group.Key, title: title})
+	}
+
+	for _, child := range allSubcommands(parent) {
+		if child == nil {
+			continue
+		}
+		groupKey := usageGroupKey(child)
+		sectionIndex, ok := sectionsByKey[groupKey]
+		if !ok {
+			panic(fmt.Sprintf("chomp: unknown usage group %q for command %q", groupKey, child.Name()))
+		}
+		if hidden, ok := child.(HiddenCommand); ok && hidden.Hidden() {
+			continue
+		}
+		sections[sectionIndex].commands = append(sections[sectionIndex].commands, child)
+	}
+
+	rendered := make([]usageSection, 0, len(sections))
+	for _, section := range sections {
+		if len(section.commands) > 0 {
+			rendered = append(rendered, section)
+		}
+	}
+	if len(rendered) == 0 {
+		return []usageSection{{commands: visible}}
+	}
+	return rendered
+}
+
+func usageGroupDefinitions(command Command) []UsageGroup {
+	grouper, ok := command.(UsageGrouper)
+	if !ok {
+		return nil
+	}
+	return grouper.UsageGroups()
+}
+
+func allSubcommands(command Command) []Command {
+	parent, ok := command.(Subcommander)
+	if !ok {
+		return nil
+	}
+	return parent.Subcommands()
+}
+
+func usageGroupKey(command Command) string {
+	grouped, ok := command.(UsageGroupedCommand)
+	if !ok {
+		return ""
+	}
+	return grouped.UsageGroup()
 }
 
 func isRouter(command Command) bool {

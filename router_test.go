@@ -273,6 +273,166 @@ Commands:
 	}
 }
 
+func TestWriteCommandUsageGroupsCommands(t *testing.T) {
+	router := &groupedRouter{
+		Router: NewRouter(
+			"tool",
+			"Project tool",
+			&recordingCommand{name: "status", summary: "Show status"},
+			&recordingCommand{name: "deploy", summary: "Deploy an app", usageGroup: "workflow"},
+			&recordingCommand{name: "logs", summary: "Show logs", usageGroup: "workflow"},
+			&recordingCommand{name: "server", summary: "Manage server", usageGroup: "admin"},
+		),
+		groups: []UsageGroup{
+			{Key: "workflow", Title: "Workflow"},
+			{Key: "admin", Title: "Admin"},
+		},
+	}
+
+	var usage strings.Builder
+	router.Usage(&usage)
+
+	const want = `Project tool
+
+Usage:
+  tool <command> [args...]
+
+Commands:
+  status  Show status
+
+Workflow:
+  deploy  Deploy an app
+  logs    Show logs
+
+Admin:
+  server  Manage server
+`
+	if got := usage.String(); got != want {
+		t.Fatalf("unexpected usage:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestWriteCommandUsageCanPositionDefaultGroup(t *testing.T) {
+	router := &groupedRouter{
+		Router: NewRouter(
+			"tool",
+			"Project tool",
+			&recordingCommand{name: "deploy", summary: "Deploy an app", usageGroup: "workflow"},
+			&recordingCommand{name: "status", summary: "Show status"},
+		),
+		groups: []UsageGroup{
+			{Key: "workflow", Title: "Workflow"},
+			{},
+		},
+	}
+
+	var usage strings.Builder
+	router.Usage(&usage)
+
+	const want = `Project tool
+
+Usage:
+  tool <command> [args...]
+
+Workflow:
+  deploy  Deploy an app
+
+Commands:
+  status  Show status
+`
+	if got := usage.String(); got != want {
+		t.Fatalf("unexpected usage:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestWriteCommandUsageFallsBackToGroupKeyForTitle(t *testing.T) {
+	router := &groupedRouter{
+		Router: NewRouter(
+			"tool",
+			"Project tool",
+			&recordingCommand{name: "status", summary: "Show status"},
+			&recordingCommand{name: "deploy", summary: "Deploy an app", usageGroup: "workflow"},
+		),
+		groups: []UsageGroup{{Key: "workflow"}},
+	}
+
+	var usage strings.Builder
+	router.Usage(&usage)
+
+	const want = `Project tool
+
+Usage:
+  tool <command> [args...]
+
+Commands:
+  status  Show status
+
+workflow:
+  deploy  Deploy an app
+`
+	if got := usage.String(); got != want {
+		t.Fatalf("unexpected usage:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestWriteCommandUsageSingleNamedGroupUsesCommandsHeading(t *testing.T) {
+	router := &groupedRouter{
+		Router: NewRouter(
+			"tool",
+			"Project tool",
+			&recordingCommand{name: "deploy", summary: "Deploy an app", usageGroup: "workflow"},
+			&recordingCommand{name: "logs", summary: "Show logs", usageGroup: "workflow"},
+		),
+		groups: []UsageGroup{{Key: "workflow", Title: "Workflow"}},
+	}
+
+	var usage strings.Builder
+	router.Usage(&usage)
+
+	const want = `Project tool
+
+Usage:
+  tool <command> [args...]
+
+Commands:
+  deploy  Deploy an app
+  logs    Show logs
+`
+	if got := usage.String(); got != want {
+		t.Fatalf("unexpected usage:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestWriteCommandUsageSkipsEmptyAndHiddenOnlyGroups(t *testing.T) {
+	router := &groupedRouter{
+		Router: NewRouter(
+			"tool",
+			"Project tool",
+			&recordingCommand{name: "status", summary: "Show status"},
+			&recordingCommand{name: "debug", summary: "Debug internals", hidden: true, usageGroup: "internal"},
+		),
+		groups: []UsageGroup{
+			{Key: "workflow", Title: "Workflow"},
+			{Key: "internal", Title: "Internal"},
+		},
+	}
+
+	var usage strings.Builder
+	router.Usage(&usage)
+
+	const want = `Project tool
+
+Usage:
+  tool <command> [args...]
+
+Commands:
+  status  Show status
+`
+	if got := usage.String(); got != want {
+		t.Fatalf("unexpected usage:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func TestRouterUsageSkipsHiddenCommands(t *testing.T) {
 	hidden := &recordingCommand{name: "deploy", summary: "Legacy deploy", hidden: true}
 	router := NewRouter(
@@ -379,6 +539,45 @@ func TestNewRouterPanicsForInvalidCommands(t *testing.T) {
 			},
 			want: `chomp: command name cannot contain whitespace: "bad root"`,
 		},
+		{
+			name: "duplicate usage group",
+			run: func() {
+				router := &groupedRouter{
+					Router: NewRouter("tool", "", &recordingCommand{name: "deploy", usageGroup: "workflow"}),
+					groups: []UsageGroup{
+						{Key: "workflow", Title: "Workflow"},
+						{Key: "workflow", Title: "Workflows"},
+					},
+				}
+				var usage strings.Builder
+				router.Usage(&usage)
+			},
+			want: `chomp: duplicate usage group "workflow"`,
+		},
+		{
+			name: "unknown usage group",
+			run: func() {
+				router := &groupedRouter{
+					Router: NewRouter("tool", "", &recordingCommand{name: "deploy", usageGroup: "workflow"}),
+					groups: []UsageGroup{{Key: "admin", Title: "Admin"}},
+				}
+				var usage strings.Builder
+				router.Usage(&usage)
+			},
+			want: `chomp: unknown usage group "workflow" for command "deploy"`,
+		},
+		{
+			name: "unknown hidden usage group",
+			run: func() {
+				router := &groupedRouter{
+					Router: NewRouter("tool", "", &recordingCommand{name: "debug", hidden: true, usageGroup: "internal"}),
+					groups: []UsageGroup{{Key: "admin", Title: "Admin"}},
+				}
+				var usage strings.Builder
+				router.Usage(&usage)
+			},
+			want: `chomp: unknown usage group "internal" for command "debug"`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -405,6 +604,7 @@ type recordingCommand struct {
 	args        []string
 	err         error
 	subcommands []Command
+	usageGroup  string
 }
 
 func (command *recordingCommand) Name() string { return command.name }
@@ -412,6 +612,8 @@ func (command *recordingCommand) Name() string { return command.name }
 func (command *recordingCommand) Summary() string { return command.summary }
 
 func (command *recordingCommand) Hidden() bool { return command.hidden }
+
+func (command *recordingCommand) UsageGroup() string { return command.usageGroup }
 
 func (command *recordingCommand) Subcommands() []Command {
 	return command.subcommands
@@ -423,3 +625,16 @@ func (command *recordingCommand) Run(_ context.Context, args []string) error {
 }
 
 func (command *recordingCommand) Usage(_ io.Writer) {}
+
+type groupedRouter struct {
+	*Router
+	groups []UsageGroup
+}
+
+func (router *groupedRouter) Usage(w io.Writer) {
+	WriteCommandUsage(w, router, nil)
+}
+
+func (router *groupedRouter) UsageGroups() []UsageGroup {
+	return router.groups
+}
