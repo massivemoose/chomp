@@ -102,12 +102,8 @@ func (StatusCommand) Usage(w io.Writer) {
 
 router := chomp.NewRouter("tool", "Project tool.", StatusCommand{})
 if err := router.Run(context.Background(), os.Args[1:]); err != nil {
-	if command, ok := chomp.UsageCommand(err); ok {
-		command.Usage(os.Stdout)
-		return
-	}
-	if errors.Is(err, chomp.ErrUsage) {
-		router.Usage(os.Stdout)
+	if command, path, ok := chomp.UsageTarget(err); ok {
+		chomp.WriteCommandUsage(os.Stdout, command, path)
 		return
 	}
 	fmt.Fprintln(os.Stderr, err)
@@ -115,9 +111,40 @@ if err := router.Run(context.Background(), os.Args[1:]); err != nil {
 }
 ```
 
-Routers dispatch to named commands, support `help <command>`, omit hidden
-commands from usage, and can be nested because a router itself satisfies the
-command interface. Each command still owns its own parsing and business logic.
+Routers dispatch to named commands, support path-aware help such as
+`help app inspect`, omit hidden commands from generated usage, and can be
+nested either by composing routers or by implementing `Subcommander`. Each
+command still owns its own parsing and business logic.
+
+```go
+type AppCommand struct{}
+
+func (AppCommand) Name() string { return "app" }
+func (AppCommand) Summary() string { return "Manage apps" }
+func (AppCommand) Run(context.Context, []string) error {
+	return chomp.ErrUsage
+}
+func (AppCommand) Usage(w io.Writer) {
+	chomp.WriteCommandUsage(w, AppCommand{}, []string{"tool"})
+}
+func (AppCommand) Subcommands() []chomp.Command {
+	return []chomp.Command{ListCommand{}, InspectCommand{}}
+}
+```
+
+Generated parent usage includes the full command path and preserves declaration
+order:
+
+```text
+Manage apps
+
+Usage:
+  tool app <command> [args...]
+
+Commands:
+  list     List apps
+  inspect  Inspect an app
+```
 
 ## Scope
 
@@ -127,12 +154,12 @@ Chomp focuses on parser, tiny router, and usage rendering:
 - long flags and single-short aliases;
 - required flags, descriptions, defaults, and value labels;
 - positional arity;
-- explicit command dispatch;
+- explicit nested command dispatch;
 - stable plain-text usage.
 
-Short clusters, command aliases, shell completion, env/config binding, color,
-generated docs, lifecycle hooks, middleware, and command execution are outside
-its scope.
+Short clusters, command aliases, inherited flags, shell completion,
+env/config binding, color, generated docs, lifecycle hooks, middleware, and
+command execution are outside its scope.
 
 ## License
 

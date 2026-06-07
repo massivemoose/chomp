@@ -29,8 +29,22 @@ func TestRouterReturnsUsageForRootHelp(t *testing.T) {
 		if !errors.Is(err, ErrUsage) {
 			t.Fatalf("expected ErrUsage for %#v, got %v", args, err)
 		}
-		if _, ok := UsageCommand(err); ok {
-			t.Fatalf("expected root usage for %#v, got command usage", args)
+		compatCommand, ok := UsageCommand(err)
+		if !ok {
+			t.Fatalf("expected root usage command for %#v, got %v", args, err)
+		}
+		if compatCommand != router {
+			t.Fatalf("expected root usage command %p, got %p", router, compatCommand)
+		}
+		usageCommand, path, ok := UsageTarget(err)
+		if !ok {
+			t.Fatalf("expected root usage target for %#v, got %v", args, err)
+		}
+		if usageCommand != router {
+			t.Fatalf("expected root usage command %p, got %p", router, usageCommand)
+		}
+		if len(path) != 0 {
+			t.Fatalf("expected empty root path, got %#v", path)
 		}
 	}
 }
@@ -72,6 +86,126 @@ func TestRouterPreservesNestedUsageError(t *testing.T) {
 	if usageCommand != leaf {
 		t.Fatalf("expected nested usage command %p, got %p", leaf, usageCommand)
 	}
+
+	usageCommand, path, ok := UsageTarget(err)
+	if !ok {
+		t.Fatalf("expected nested usage target, got %v", err)
+	}
+	if usageCommand != leaf {
+		t.Fatalf("expected nested usage target command %p, got %p", leaf, usageCommand)
+	}
+	if got := strings.Join(path, " "); got != "ovek auth" {
+		t.Fatalf("expected nested usage path %q, got %q", "ovek auth", got)
+	}
+}
+
+func TestRouterDispatchesNestedCommand(t *testing.T) {
+	inspect := &recordingCommand{name: "inspect", summary: "Inspect app"}
+	app := &recordingCommand{name: "app", summary: "Manage apps", subcommands: []Command{inspect}}
+	router := NewRouter("ovek", "Ovek CLI", app)
+
+	err := router.Run(context.Background(), []string{"app", "inspect", "api"})
+	if err != nil {
+		t.Fatalf("expected nested dispatch to succeed, got error: %v", err)
+	}
+	if got := strings.Join(inspect.args, " "); got != "api" {
+		t.Fatalf("expected nested command args %q, got %q", "api", got)
+	}
+	if len(app.args) != 0 {
+		t.Fatalf("expected parent command not to run, got args %#v", app.args)
+	}
+}
+
+func TestRouterRunsNoArgLeafCommand(t *testing.T) {
+	version := &recordingCommand{name: "version", summary: "Print version"}
+	router := NewRouter("ovek", "Ovek CLI", version)
+
+	err := router.Run(context.Background(), []string{"version"})
+	if err != nil {
+		t.Fatalf("expected no-arg leaf command to run, got error: %v", err)
+	}
+	if version.args == nil {
+		t.Fatal("expected no-arg leaf command to record a run")
+	}
+	if len(version.args) != 0 {
+		t.Fatalf("expected no forwarded args, got %#v", version.args)
+	}
+}
+
+func TestRouterReturnsNestedUsageTargets(t *testing.T) {
+	inspect := &recordingCommand{name: "inspect", summary: "Inspect app"}
+	app := &recordingCommand{name: "app", summary: "Manage apps", subcommands: []Command{inspect}}
+	router := NewRouter("ovek", "Ovek CLI", app)
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "root help path", args: []string{"help", "app", "inspect"}},
+		{name: "nested help path", args: []string{"app", "help", "inspect"}},
+		{name: "inline leaf help", args: []string{"app", "inspect", "--help"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := router.Run(context.Background(), tt.args)
+			if !errors.Is(err, ErrUsage) {
+				t.Fatalf("expected ErrUsage, got %v", err)
+			}
+			command, path, ok := UsageTarget(err)
+			if !ok {
+				t.Fatalf("expected usage target, got %v", err)
+			}
+			if command != inspect {
+				t.Fatalf("expected inspect usage command %p, got %p", inspect, command)
+			}
+			if got := strings.Join(path, " "); got != "ovek app" {
+				t.Fatalf("expected usage path %q, got %q", "ovek app", got)
+			}
+		})
+	}
+}
+
+func TestRouterReturnsParentUsageTargetWhenGroupCommandReturnsUsage(t *testing.T) {
+	app := &recordingCommand{name: "app", summary: "Manage apps", err: ErrUsage, subcommands: []Command{
+		&recordingCommand{name: "inspect", summary: "Inspect app"},
+	}}
+	router := NewRouter("ovek", "Ovek CLI", app)
+
+	err := router.Run(context.Background(), []string{"app"})
+	if !errors.Is(err, ErrUsage) {
+		t.Fatalf("expected ErrUsage, got %v", err)
+	}
+	command, path, ok := UsageTarget(err)
+	if !ok {
+		t.Fatalf("expected usage target, got %v", err)
+	}
+	if command != app {
+		t.Fatalf("expected app usage command %p, got %p", app, command)
+	}
+	if got := strings.Join(path, " "); got != "ovek" {
+		t.Fatalf("expected usage path %q, got %q", "ovek", got)
+	}
+}
+
+func TestRouterSupportsRunnableParentFallback(t *testing.T) {
+	tail := &recordingCommand{name: "tail", summary: "Tail logs"}
+	logs := &recordingCommand{name: "logs", summary: "Show logs", subcommands: []Command{tail}}
+	router := NewRouter("ovek", "Ovek CLI", logs)
+
+	if err := router.Run(context.Background(), []string{"logs", "api"}); err != nil {
+		t.Fatalf("expected runnable parent fallback, got error: %v", err)
+	}
+	if got := strings.Join(logs.args, " "); got != "api" {
+		t.Fatalf("expected logs args %q, got %q", "api", got)
+	}
+
+	if err := router.Run(context.Background(), []string{"logs", "tail", "api"}); err != nil {
+		t.Fatalf("expected nested child dispatch, got error: %v", err)
+	}
+	if got := strings.Join(tail.args, " "); got != "api" {
+		t.Fatalf("expected tail args %q, got %q", "api", got)
+	}
 }
 
 func TestRouterReturnsUnknownCommandError(t *testing.T) {
@@ -97,11 +231,42 @@ func TestRouterUsageListsCommands(t *testing.T) {
 	const want = `Ovek CLI
 
 Usage:
-  ovek <command>
+  ovek <command> [args...]
 
 Commands:
-  auth         Manage local auth
-  status       Show project status
+  status  Show project status
+  auth    Manage local auth
+`
+	if got := usage.String(); got != want {
+		t.Fatalf("unexpected usage:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestWriteCommandUsageRendersNestedPathAndDeclarationOrder(t *testing.T) {
+	router := NewRouter(
+		"backlot",
+		"Backlot CLI",
+		NewRouter(
+			"autosync",
+			"Sync workspace state",
+			&recordingCommand{name: "status", summary: "Show sync status"},
+			&recordingCommand{name: "enable", summary: "Enable autosync"},
+		),
+	)
+
+	autosync := router.Subcommands()[0]
+
+	var usage strings.Builder
+	WriteCommandUsage(&usage, autosync, []string{"backlot"})
+
+	const want = `Sync workspace state
+
+Usage:
+  backlot autosync <command> [args...]
+
+Commands:
+  status  Show sync status
+  enable  Enable autosync
 `
 	if got := usage.String(); got != want {
 		t.Fatalf("unexpected usage:\n%s\nwant:\n%s", got, want)
@@ -109,11 +274,12 @@ Commands:
 }
 
 func TestRouterUsageSkipsHiddenCommands(t *testing.T) {
+	hidden := &recordingCommand{name: "deploy", summary: "Legacy deploy", hidden: true}
 	router := NewRouter(
 		"ovek",
 		"Ovek CLI",
 		&recordingCommand{name: "run", summary: "Run capsule image"},
-		&recordingCommand{name: "deploy", summary: "Legacy deploy", hidden: true},
+		hidden,
 	)
 
 	var usage strings.Builder
@@ -125,6 +291,19 @@ func TestRouterUsageSkipsHiddenCommands(t *testing.T) {
 	}
 	if strings.Contains(text, "deploy") {
 		t.Fatalf("expected usage to hide deploy command, got %q", text)
+	}
+
+	if err := router.Run(context.Background(), []string{"deploy"}); err != nil {
+		t.Fatalf("expected hidden command to dispatch, got %v", err)
+	}
+
+	err := router.Run(context.Background(), []string{"help", "deploy"})
+	command, _, ok := UsageTarget(err)
+	if !ok {
+		t.Fatalf("expected direct hidden help target, got %v", err)
+	}
+	if command != hidden {
+		t.Fatalf("expected hidden usage target %p, got %p", hidden, command)
 	}
 }
 
@@ -156,6 +335,30 @@ func TestNewRouterPanicsForInvalidCommands(t *testing.T) {
 			want: `chomp: duplicate command "status"`,
 		},
 		{
+			name: "nested nil command",
+			run: func() {
+				NewRouter("ovek", "", &recordingCommand{name: "app", subcommands: []Command{nil}})
+			},
+			want: "chomp: nil command",
+		},
+		{
+			name: "nested empty command name",
+			run: func() {
+				NewRouter("ovek", "", &recordingCommand{name: "app", subcommands: []Command{&recordingCommand{}}})
+			},
+			want: "chomp: command name cannot be empty",
+		},
+		{
+			name: "duplicate nested command name",
+			run: func() {
+				NewRouter("ovek", "", &recordingCommand{name: "app", subcommands: []Command{
+					&recordingCommand{name: "status"},
+					&recordingCommand{name: "status"},
+				}})
+			},
+			want: `chomp: duplicate command "status"`,
+		},
+		{
 			name: "reserved help command",
 			run: func() {
 				NewRouter("ovek", "", &recordingCommand{name: "help"})
@@ -168,6 +371,13 @@ func TestNewRouterPanicsForInvalidCommands(t *testing.T) {
 				NewRouter("ovek", "", &recordingCommand{name: "bad name"})
 			},
 			want: `chomp: command name cannot contain whitespace: "bad name"`,
+		},
+		{
+			name: "invalid root name",
+			run: func() {
+				NewRouter("bad root", "")
+			},
+			want: `chomp: command name cannot contain whitespace: "bad root"`,
 		},
 	}
 
@@ -189,11 +399,12 @@ func TestNewRouterPanicsForInvalidCommands(t *testing.T) {
 }
 
 type recordingCommand struct {
-	name    string
-	summary string
-	hidden  bool
-	args    []string
-	err     error
+	name        string
+	summary     string
+	hidden      bool
+	args        []string
+	err         error
+	subcommands []Command
 }
 
 func (command *recordingCommand) Name() string { return command.name }
@@ -202,8 +413,12 @@ func (command *recordingCommand) Summary() string { return command.summary }
 
 func (command *recordingCommand) Hidden() bool { return command.hidden }
 
+func (command *recordingCommand) Subcommands() []Command {
+	return command.subcommands
+}
+
 func (command *recordingCommand) Run(_ context.Context, args []string) error {
-	command.args = append([]string(nil), args...)
+	command.args = append([]string{}, args...)
 	return command.err
 }
 
