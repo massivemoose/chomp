@@ -161,6 +161,43 @@ func (AppCommand) UsageGroups() []chomp.UsageGroup {
 func (DeployCommand) UsageGroup() string { return "workflow" }
 ```
 
+## Executable Demo
+
+This repository includes a local playground CLI under `examples/chompdemo` for
+checking Chomp's parser and router UX in a complete `main` package.
+
+```sh
+go run ./examples/chompdemo help
+```
+
+```sh
+go run ./examples/chompdemo app
+```
+
+```sh
+go run ./examples/chompdemo app list --format json
+```
+
+```sh
+go run ./examples/chompdemo deploy api --env prod --image registry/app:v1 --dry-run
+```
+
+```sh
+go run ./examples/chompdemo logs api
+```
+
+```sh
+go run ./examples/chompdemo logs tail api --follow
+```
+
+```sh
+go run ./examples/chompdemo debug
+```
+
+```sh
+go run ./examples/chompdemo wat
+```
+
 ## Scope
 
 Chomp focuses on parser, tiny router, and usage rendering:
