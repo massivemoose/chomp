@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -133,6 +136,33 @@ func TestParserErrorReturnsUsage(t *testing.T) {
 	result.wantStderr("")
 }
 
+func TestProcessHelpExitsSuccessfully(t *testing.T) {
+	result := runProcess(t, "help")
+
+	result.wantCode(0)
+	result.wantStdoutContains(
+		"Chomp demo CLI\n\n",
+		"Usage:\n  chompdemo <command> [args...]\n\n",
+	)
+	result.wantStderr("")
+}
+
+func TestProcessGroupOnlyUsageExitsWithGoRunError(t *testing.T) {
+	result := runProcess(t, "app")
+
+	result.wantCode(1)
+	result.wantStdoutContains("Usage:\n  chompdemo app <command> [args...]\n\n")
+	result.wantStderrContains("exit status 2")
+}
+
+func TestProcessUnknownCommandWritesStderr(t *testing.T) {
+	result := runProcess(t, "wat")
+
+	result.wantCode(1)
+	result.wantStdout("")
+	result.wantStderrContains(`unknown command "wat"`, "exit status 1")
+}
+
 type demoResult struct {
 	t      *testing.T
 	code   int
@@ -145,6 +175,35 @@ func runDemo(t *testing.T, args []string) demoResult {
 
 	var stdout, stderr bytes.Buffer
 	code := run(args, &stdout, &stderr)
+	return demoResult{
+		t:      t,
+		code:   code,
+		stdout: stdout.String(),
+		stderr: stderr.String(),
+	}
+}
+
+func runProcess(t *testing.T, args ...string) demoResult {
+	t.Helper()
+
+	commandArgs := append([]string{"run", "."}, args...)
+	cmd := exec.Command("go", commandArgs...)
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(), "GOCACHE="+t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	code := 0
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("failed to run go command: %v", err)
+		}
+		code = exitErr.ExitCode()
+	}
+
 	return demoResult{
 		t:      t,
 		code:   code,
@@ -181,6 +240,15 @@ func (result demoResult) wantStdoutNotContains(wants ...string) {
 	for _, want := range wants {
 		if strings.Contains(result.stdout, want) {
 			result.t.Fatalf("expected stdout not to contain %q, got:\n%s", want, result.stdout)
+		}
+	}
+}
+
+func (result demoResult) wantStderrContains(wants ...string) {
+	result.t.Helper()
+	for _, want := range wants {
+		if !strings.Contains(result.stderr, want) {
+			result.t.Fatalf("expected stderr to contain %q, got:\n%s", want, result.stderr)
 		}
 	}
 }
