@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -81,6 +82,7 @@ const (
 	flagKindString flagKind = iota
 	flagKindBool
 	flagKindInt
+	flagKindDuration
 )
 
 // Result contains parsed flag and positional values.
@@ -122,6 +124,11 @@ func (spec *Spec) Int(name string, options ...FlagOption) *Spec {
 	return spec.flag(name, flagKindInt, options...)
 }
 
+// Duration declares a time.Duration flag.
+func (spec *Spec) Duration(name string, options ...FlagOption) *Spec {
+	return spec.flag(name, flagKindDuration, options...)
+}
+
 // Positionals declares the accepted positional count and usage names.
 func (spec *Spec) Positionals(min, max int, names ...string) *Spec {
 	spec.minPositionals = min
@@ -151,6 +158,8 @@ func (spec *Spec) Parse(args []string) (Result, error) {
 			result.values[flag.name], _ = maybeBoolValue(flag.defaultValue)
 		case flagKindInt:
 			result.values[flag.name], _ = strconv.Atoi(flag.defaultValue)
+		case flagKindDuration:
+			result.values[flag.name], _ = time.ParseDuration(flag.defaultValue)
 		}
 	}
 
@@ -229,6 +238,12 @@ func (result Result) Bool(name string) bool {
 // Int returns a parsed int flag value.
 func (result Result) Int(name string) int {
 	value, _ := result.values[name].(int)
+	return value
+}
+
+// Duration returns a parsed time.Duration flag value.
+func (result Result) Duration(name string) time.Duration {
+	value, _ := result.values[name].(time.Duration)
 	return value
 }
 
@@ -391,6 +406,11 @@ func (spec *Spec) flag(name string, kind flagKind, options ...FlagOption) *Spec 
 			spec.definitionErrs = append(spec.definitionErrs, fmt.Errorf("invalid default for --%s: %q", flag.name, flag.defaultValue))
 		}
 	}
+	if kind == flagKindDuration && flag.hasDefault {
+		if _, err := time.ParseDuration(flag.defaultValue); err != nil {
+			spec.definitionErrs = append(spec.definitionErrs, fmt.Errorf("invalid default for --%s: %q", flag.name, flag.defaultValue))
+		}
+	}
 	spec.flagOrder = append(spec.flagOrder, flag)
 	return spec
 }
@@ -441,6 +461,20 @@ func (spec *Spec) parseFlagValue(result *Result, flag *flagSpec, inlineValue str
 		parsed, err := strconv.Atoi(value)
 		if err != nil {
 			return fmt.Errorf("invalid --%s value %q: expected int", flag.name, value)
+		}
+		result.values[flag.name] = parsed
+	case flagKindDuration:
+		value := inlineValue
+		if !hasInlineValue {
+			*index++
+			if *index >= len(args) {
+				return fmt.Errorf("%s --%s requires a value", spec.name(), flag.name)
+			}
+			value = args[*index]
+		}
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return fmt.Errorf("invalid --%s value %q: expected duration", flag.name, value)
 		}
 		result.values[flag.name] = parsed
 	}
@@ -551,13 +585,15 @@ func (flag *flagSpec) usageDescription() string {
 }
 
 func (flag *flagSpec) takesValue() bool {
-	return flag.kind == flagKindString || flag.kind == flagKindInt
+	return flag.kind == flagKindString || flag.kind == flagKindInt || flag.kind == flagKindDuration
 }
 
 func (flag *flagSpec) defaultValueName() string {
 	switch flag.kind {
 	case flagKindInt:
 		return "<int>"
+	case flagKindDuration:
+		return "<duration>"
 	default:
 		return "<value>"
 	}

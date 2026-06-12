@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestUsageNormalizesCommandMetadataAndUsesDisplayName(t *testing.T) {
@@ -623,6 +624,127 @@ Flags:
 `
 	if got := spec.Usage(); got != want {
 		t.Fatalf("unexpected int usage:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestParseDurationFlagForms(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want time.Duration
+	}{
+		{"long inline", []string{"--interval=30s"}, 30 * time.Second},
+		{"long separated", []string{"--interval", "5m"}, 5 * time.Minute},
+		{"short separated complex", []string{"-i", "1h30m"}, 90 * time.Minute},
+		{"short inline negative", []string{"-i=-5s"}, -5 * time.Second},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := New("tool").
+				Duration("interval", Short('i')).
+				Parse(tt.args)
+			if err != nil {
+				t.Fatalf("expected parse to succeed, got %v", err)
+			}
+			if got := result.Duration("interval"); got != tt.want {
+				t.Fatalf("expected interval %s, got %s", tt.want, got)
+			}
+			if !result.IsSet("interval") {
+				t.Fatal("expected explicit duration flag to be marked set")
+			}
+		})
+	}
+}
+
+func TestParseDurationDefaultsRequiredAndRepeatedValues(t *testing.T) {
+	result, err := New("tool").
+		Duration("interval", Default("5m")).
+		Parse(nil)
+	if err != nil {
+		t.Fatalf("expected parse to succeed, got %v", err)
+	}
+	if got := result.Duration("interval"); got != 5*time.Minute {
+		t.Fatalf("expected duration default, got %s", got)
+	}
+	if result.IsSet("interval") {
+		t.Fatal("expected defaulted duration flag not to be marked set")
+	}
+
+	result, err = New("tool").
+		Duration("interval", Required()).
+		Parse([]string{"--interval=0s"})
+	if err != nil {
+		t.Fatalf("expected explicit zero duration to satisfy required, got %v", err)
+	}
+	if got := result.Duration("interval"); got != 0 {
+		t.Fatalf("expected explicit zero duration, got %s", got)
+	}
+
+	result, err = New("tool").
+		Duration("interval", Short('i')).
+		Parse([]string{"--interval=1s", "-i", "2s"})
+	if err != nil {
+		t.Fatalf("expected parse to succeed, got %v", err)
+	}
+	if got := result.Duration("interval"); got != 2*time.Second {
+		t.Fatalf("expected last repeated duration value, got %s", got)
+	}
+	if got := result.LastFlag("interval"); got != "interval" {
+		t.Fatalf("expected duration occurrence in LastFlag, got %q", got)
+	}
+}
+
+func TestParseRejectsInvalidDurationValues(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"missing", []string{"--interval"}, "tool --interval requires a value"},
+		{"empty", []string{"--interval="}, `invalid --interval value "": expected duration`},
+		{"word", []string{"--interval=soon"}, `invalid --interval value "soon": expected duration`},
+		{"spaced", []string{"--interval", "5 minutes"}, `invalid --interval value "5 minutes": expected duration`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := New("tool").Duration("interval").Parse(tt.args)
+			if err == nil || err.Error() != tt.want {
+				t.Fatalf("expected error %q, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsInvalidDurationDefault(t *testing.T) {
+	spec := New("tool").Duration("interval", Default("soon"))
+
+	err := spec.Validate()
+	if err == nil || err.Error() != `invalid default for --interval: "soon"` {
+		t.Fatalf("expected invalid duration default, got %v", err)
+	}
+
+	_, parseErr := spec.Parse(nil)
+	if parseErr == nil || parseErr.Error() != err.Error() {
+		t.Fatalf("expected Parse to return validation error %q, got %v", err, parseErr)
+	}
+}
+
+func TestUsageRendersDurationValueLabelsAndDefaults(t *testing.T) {
+	spec := New("tool").
+		Duration("interval", Short('i'), Description("sync interval"), Default("5m")).
+		Duration("timeout")
+
+	const want = `Usage: tool [flags]
+
+Flags:
+  -i, --interval <duration>  sync interval (default 5m)
+      --timeout <duration>
+  -h, --help                 show help
+`
+	if got := spec.Usage(); got != want {
+		t.Fatalf("unexpected duration usage:\n%s\nwant:\n%s", got, want)
 	}
 }
 
