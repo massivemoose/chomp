@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/massivemoose/chomp"
 )
@@ -245,6 +246,9 @@ func (command deployCommand) Run(_ context.Context, args []string) error {
 	fmt.Fprintf(command.stdout, "app=%s\n", result.Positional(0))
 	fmt.Fprintf(command.stdout, "env=%s\n", result.String("env"))
 	fmt.Fprintf(command.stdout, "image=%s\n", result.String("image"))
+	fmt.Fprintf(command.stdout, "replicas=%d\n", result.Int("replicas"))
+	fmt.Fprintf(command.stdout, "timeout=%s\n", result.Duration("timeout"))
+	fmt.Fprintf(command.stdout, "include=%s\n", strings.Join(result.Strings("include"), ","))
 	fmt.Fprintf(command.stdout, "dry-run=%t\n", result.Bool("dry-run"))
 	return nil
 }
@@ -264,6 +268,17 @@ func deploySpec() *chomp.Spec {
 			chomp.Required(),
 			chomp.ValueName("ref"),
 			chomp.Description("image reference to deploy"),
+		).
+		Int("replicas",
+			chomp.Default("1"),
+			chomp.Description("replica count"),
+		).
+		Duration("timeout",
+			chomp.Default("2m"),
+			chomp.Description("deployment timeout"),
+		).
+		Strings("include",
+			chomp.Description("path to include"),
 		).
 		Bool("dry-run", chomp.Description("print planned work without deploying")).
 		Positionals(1, 1, "app")
