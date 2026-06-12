@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -79,12 +80,12 @@ type flagKind int
 const (
 	flagKindString flagKind = iota
 	flagKindBool
+	flagKindInt
 )
 
 // Result contains parsed flag and positional values.
 type Result struct {
-	strings     map[string]string
-	bools       map[string]bool
+	values      map[string]any
 	seen        map[string]bool
 	flagOrder   []string
 	positionals []string
@@ -116,6 +117,11 @@ func (spec *Spec) Bool(name string, options ...FlagOption) *Spec {
 	return spec.flag(name, flagKindBool, options...)
 }
 
+// Int declares an int flag.
+func (spec *Spec) Int(name string, options ...FlagOption) *Spec {
+	return spec.flag(name, flagKindInt, options...)
+}
+
 // Positionals declares the accepted positional count and usage names.
 func (spec *Spec) Positionals(min, max int, names ...string) *Spec {
 	spec.minPositionals = min
@@ -131,9 +137,8 @@ func (spec *Spec) Parse(args []string) (Result, error) {
 	}
 
 	result := Result{
-		strings: make(map[string]string),
-		bools:   make(map[string]bool),
-		seen:    make(map[string]bool),
+		values: make(map[string]any),
+		seen:   make(map[string]bool),
 	}
 	for _, flag := range spec.flagOrder {
 		if !flag.hasDefault {
@@ -141,9 +146,11 @@ func (spec *Spec) Parse(args []string) (Result, error) {
 		}
 		switch flag.kind {
 		case flagKindString:
-			result.strings[flag.name] = flag.defaultValue
+			result.values[flag.name] = flag.defaultValue
 		case flagKindBool:
-			result.bools[flag.name], _ = maybeBoolValue(flag.defaultValue)
+			result.values[flag.name], _ = maybeBoolValue(flag.defaultValue)
+		case flagKindInt:
+			result.values[flag.name], _ = strconv.Atoi(flag.defaultValue)
 		}
 	}
 
@@ -209,12 +216,20 @@ func (spec *Spec) ParseCommandLine() (Result, error) {
 
 // String returns a parsed string flag value.
 func (result Result) String(name string) string {
-	return result.strings[name]
+	value, _ := result.values[name].(string)
+	return value
 }
 
 // Bool returns a parsed bool flag value.
 func (result Result) Bool(name string) bool {
-	return result.bools[name]
+	value, _ := result.values[name].(bool)
+	return value
+}
+
+// Int returns a parsed int flag value.
+func (result Result) Int(name string) int {
+	value, _ := result.values[name].(int)
+	return value
 }
 
 // IsSet reports whether a flag was explicitly present.
@@ -336,8 +351,8 @@ func (spec *Spec) Validate() error {
 
 func (spec *Spec) flag(name string, kind flagKind, options ...FlagOption) *Spec {
 	flag := &flagSpec{name: strings.TrimSpace(name), kind: kind}
-	if kind == flagKindString {
-		flag.valueName = "<value>"
+	if flag.takesValue() {
+		flag.valueName = flag.defaultValueName()
 	}
 	for _, option := range options {
 		if option != nil {
@@ -371,6 +386,11 @@ func (spec *Spec) flag(name string, kind flagKind, options ...FlagOption) *Spec 
 			spec.definitionErrs = append(spec.definitionErrs, fmt.Errorf("invalid default for --%s: %q", flag.name, flag.defaultValue))
 		}
 	}
+	if kind == flagKindInt && flag.hasDefault {
+		if _, err := strconv.Atoi(flag.defaultValue); err != nil {
+			spec.definitionErrs = append(spec.definitionErrs, fmt.Errorf("invalid default for --%s: %q", flag.name, flag.defaultValue))
+		}
+	}
 	spec.flagOrder = append(spec.flagOrder, flag)
 	return spec
 }
@@ -393,7 +413,7 @@ func (spec *Spec) parseFlagValue(result *Result, flag *flagSpec, inlineValue str
 			}
 			value = args[*index]
 		}
-		result.strings[flag.name] = value
+		result.values[flag.name] = value
 	case flagKindBool:
 		value := true
 		if hasInlineValue {
@@ -408,7 +428,21 @@ func (spec *Spec) parseFlagValue(result *Result, flag *flagSpec, inlineValue str
 				value = parsed
 			}
 		}
-		result.bools[flag.name] = value
+		result.values[flag.name] = value
+	case flagKindInt:
+		value := inlineValue
+		if !hasInlineValue {
+			*index++
+			if *index >= len(args) {
+				return fmt.Errorf("%s --%s requires a value", spec.name(), flag.name)
+			}
+			value = args[*index]
+		}
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid --%s value %q: expected int", flag.name, value)
+		}
+		result.values[flag.name] = parsed
 	}
 	result.seen[flag.name] = true
 	result.flagOrder = append(result.flagOrder, flag.name)
@@ -490,7 +524,7 @@ func (spec *Spec) positionalPlaceholders() string {
 
 func (flag *flagSpec) display() string {
 	long := "--" + flag.name
-	if flag.kind == flagKindString {
+	if flag.takesValue() {
 		long += " " + flag.valueName
 	}
 	if flag.short == 0 {
@@ -514,6 +548,19 @@ func (flag *flagSpec) usageDescription() string {
 		return "(default " + defaultText + ")"
 	}
 	return description + " (default " + defaultText + ")"
+}
+
+func (flag *flagSpec) takesValue() bool {
+	return flag.kind == flagKindString || flag.kind == flagKindInt
+}
+
+func (flag *flagSpec) defaultValueName() string {
+	switch flag.kind {
+	case flagKindInt:
+		return "<int>"
+	default:
+		return "<value>"
+	}
 }
 
 func valueLabel(name string) string {
