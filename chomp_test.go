@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestUsageNormalizesCommandMetadataAndUsesDisplayName(t *testing.T) {
@@ -505,6 +506,332 @@ func TestParseUsesLastRepeatedValue(t *testing.T) {
 	}
 }
 
+func TestParseIntFlagForms(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want int
+	}{
+		{"long inline", []string{"--limit=10"}, 10},
+		{"long separated", []string{"--limit", "11"}, 11},
+		{"short separated", []string{"-n", "12"}, 12},
+		{"short inline negative", []string{"-n=-1"}, -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := New("tool").
+				Int("limit", Short('n')).
+				Parse(tt.args)
+			if err != nil {
+				t.Fatalf("expected parse to succeed, got %v", err)
+			}
+			if got := result.Int("limit"); got != tt.want {
+				t.Fatalf("expected limit %d, got %d", tt.want, got)
+			}
+			if !result.IsSet("limit") {
+				t.Fatal("expected explicit int flag to be marked set")
+			}
+		})
+	}
+}
+
+func TestParseIntDefaultsRequiredAndRepeatedValues(t *testing.T) {
+	result, err := New("tool").
+		Int("limit", Default("3")).
+		Parse(nil)
+	if err != nil {
+		t.Fatalf("expected parse to succeed, got %v", err)
+	}
+	if got := result.Int("limit"); got != 3 {
+		t.Fatalf("expected int default, got %d", got)
+	}
+	if result.IsSet("limit") {
+		t.Fatal("expected defaulted int flag not to be marked set")
+	}
+
+	result, err = New("tool").
+		Int("limit", Required()).
+		Parse([]string{"--limit=0"})
+	if err != nil {
+		t.Fatalf("expected explicit zero to satisfy required int, got %v", err)
+	}
+	if got := result.Int("limit"); got != 0 {
+		t.Fatalf("expected explicit zero, got %d", got)
+	}
+
+	result, err = New("tool").
+		Int("limit", Short('n')).
+		Parse([]string{"--limit=1", "-n", "2"})
+	if err != nil {
+		t.Fatalf("expected parse to succeed, got %v", err)
+	}
+	if got := result.Int("limit"); got != 2 {
+		t.Fatalf("expected last repeated int value, got %d", got)
+	}
+	if got := result.LastFlag("limit"); got != "limit" {
+		t.Fatalf("expected int occurrence in LastFlag, got %q", got)
+	}
+}
+
+func TestParseRejectsInvalidIntValues(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"missing", []string{"--limit"}, "tool --limit requires a value"},
+		{"empty", []string{"--limit="}, `invalid --limit value "": expected int`},
+		{"word", []string{"--limit=many"}, `invalid --limit value "many": expected int`},
+		{"float", []string{"--limit=1.5"}, `invalid --limit value "1.5": expected int`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := New("tool").Int("limit").Parse(tt.args)
+			if err == nil || err.Error() != tt.want {
+				t.Fatalf("expected error %q, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsInvalidIntDefault(t *testing.T) {
+	spec := New("tool").Int("limit", Default("many"))
+
+	err := spec.Validate()
+	if err == nil || err.Error() != `invalid default for --limit: "many"` {
+		t.Fatalf("expected invalid int default, got %v", err)
+	}
+
+	_, parseErr := spec.Parse(nil)
+	if parseErr == nil || parseErr.Error() != err.Error() {
+		t.Fatalf("expected Parse to return validation error %q, got %v", err, parseErr)
+	}
+}
+
+func TestUsageRendersIntValueLabelsAndDefaults(t *testing.T) {
+	spec := New("tool").
+		Int("limit", Short('n'), Description("maximum count"), Default("3")).
+		Int("workers")
+
+	const want = `Usage: tool [flags]
+
+Flags:
+  -n, --limit <int>    maximum count (default 3)
+      --workers <int>
+  -h, --help           show help
+`
+	if got := spec.Usage(); got != want {
+		t.Fatalf("unexpected int usage:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestParseDurationFlagForms(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want time.Duration
+	}{
+		{"long inline", []string{"--interval=30s"}, 30 * time.Second},
+		{"long separated", []string{"--interval", "5m"}, 5 * time.Minute},
+		{"short separated complex", []string{"-i", "1h30m"}, 90 * time.Minute},
+		{"short inline negative", []string{"-i=-5s"}, -5 * time.Second},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := New("tool").
+				Duration("interval", Short('i')).
+				Parse(tt.args)
+			if err != nil {
+				t.Fatalf("expected parse to succeed, got %v", err)
+			}
+			if got := result.Duration("interval"); got != tt.want {
+				t.Fatalf("expected interval %s, got %s", tt.want, got)
+			}
+			if !result.IsSet("interval") {
+				t.Fatal("expected explicit duration flag to be marked set")
+			}
+		})
+	}
+}
+
+func TestParseDurationDefaultsRequiredAndRepeatedValues(t *testing.T) {
+	result, err := New("tool").
+		Duration("interval", Default("5m")).
+		Parse(nil)
+	if err != nil {
+		t.Fatalf("expected parse to succeed, got %v", err)
+	}
+	if got := result.Duration("interval"); got != 5*time.Minute {
+		t.Fatalf("expected duration default, got %s", got)
+	}
+	if result.IsSet("interval") {
+		t.Fatal("expected defaulted duration flag not to be marked set")
+	}
+
+	result, err = New("tool").
+		Duration("interval", Required()).
+		Parse([]string{"--interval=0s"})
+	if err != nil {
+		t.Fatalf("expected explicit zero duration to satisfy required, got %v", err)
+	}
+	if got := result.Duration("interval"); got != 0 {
+		t.Fatalf("expected explicit zero duration, got %s", got)
+	}
+
+	result, err = New("tool").
+		Duration("interval", Short('i')).
+		Parse([]string{"--interval=1s", "-i", "2s"})
+	if err != nil {
+		t.Fatalf("expected parse to succeed, got %v", err)
+	}
+	if got := result.Duration("interval"); got != 2*time.Second {
+		t.Fatalf("expected last repeated duration value, got %s", got)
+	}
+	if got := result.LastFlag("interval"); got != "interval" {
+		t.Fatalf("expected duration occurrence in LastFlag, got %q", got)
+	}
+}
+
+func TestParseRejectsInvalidDurationValues(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"missing", []string{"--interval"}, "tool --interval requires a value"},
+		{"empty", []string{"--interval="}, `invalid --interval value "": expected duration`},
+		{"word", []string{"--interval=soon"}, `invalid --interval value "soon": expected duration`},
+		{"spaced", []string{"--interval", "5 minutes"}, `invalid --interval value "5 minutes": expected duration`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := New("tool").Duration("interval").Parse(tt.args)
+			if err == nil || err.Error() != tt.want {
+				t.Fatalf("expected error %q, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsInvalidDurationDefault(t *testing.T) {
+	spec := New("tool").Duration("interval", Default("soon"))
+
+	err := spec.Validate()
+	if err == nil || err.Error() != `invalid default for --interval: "soon"` {
+		t.Fatalf("expected invalid duration default, got %v", err)
+	}
+
+	_, parseErr := spec.Parse(nil)
+	if parseErr == nil || parseErr.Error() != err.Error() {
+		t.Fatalf("expected Parse to return validation error %q, got %v", err, parseErr)
+	}
+}
+
+func TestUsageRendersDurationValueLabelsAndDefaults(t *testing.T) {
+	spec := New("tool").
+		Duration("interval", Short('i'), Description("sync interval"), Default("5m")).
+		Duration("timeout")
+
+	const want = `Usage: tool [flags]
+
+Flags:
+  -i, --interval <duration>  sync interval (default 5m)
+      --timeout <duration>
+  -h, --help                 show help
+`
+	if got := spec.Usage(); got != want {
+		t.Fatalf("unexpected duration usage:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestParseStringsAccumulatesRepeatedValues(t *testing.T) {
+	result, err := New("tool").
+		Strings("include", Short('I')).
+		Parse([]string{"--include=src", "--include", "docs", "-I", "test", "-I=", "--include=a,b"})
+	if err != nil {
+		t.Fatalf("expected parse to succeed, got %v", err)
+	}
+
+	want := []string{"src", "docs", "test", "", "a,b"}
+	if got := result.Strings("include"); !stringSlicesEqual(got, want) {
+		t.Fatalf("expected accumulated strings %#v, got %#v", want, got)
+	}
+	if !result.IsSet("include") {
+		t.Fatal("expected explicit strings flag to be marked set")
+	}
+	if got := result.LastFlag("include"); got != "include" {
+		t.Fatalf("expected strings occurrence in LastFlag, got %q", got)
+	}
+}
+
+func TestParseStringsDefaultsAndExplicitReplacement(t *testing.T) {
+	result, err := New("tool").
+		Strings("include", Default("src")).
+		Parse(nil)
+	if err != nil {
+		t.Fatalf("expected parse to succeed, got %v", err)
+	}
+	if got, want := result.Strings("include"), []string{"src"}; !stringSlicesEqual(got, want) {
+		t.Fatalf("expected strings default %#v, got %#v", want, got)
+	}
+	if result.IsSet("include") {
+		t.Fatal("expected defaulted strings flag not to be marked set")
+	}
+
+	result, err = New("tool").
+		Strings("include", Default("src")).
+		Parse([]string{"--include", "test", "--include", "docs"})
+	if err != nil {
+		t.Fatalf("expected parse to succeed, got %v", err)
+	}
+	if got, want := result.Strings("include"), []string{"test", "docs"}; !stringSlicesEqual(got, want) {
+		t.Fatalf("expected explicit strings to replace default with %#v, got %#v", want, got)
+	}
+}
+
+func TestResultStringsReturnsDefensiveCopy(t *testing.T) {
+	result, err := New("tool").
+		Strings("include").
+		Parse([]string{"--include", "src"})
+	if err != nil {
+		t.Fatalf("expected parse to succeed, got %v", err)
+	}
+
+	values := result.Strings("include")
+	values[0] = "changed"
+	if got, want := result.Strings("include"), []string{"src"}; !stringSlicesEqual(got, want) {
+		t.Fatalf("expected defensive copy %#v, got %#v", want, got)
+	}
+}
+
+func TestParseRejectsMissingStringsValue(t *testing.T) {
+	_, err := New("tool").Strings("include").Parse([]string{"--include"})
+	if err == nil || err.Error() != "tool --include requires a value" {
+		t.Fatalf("expected missing strings value error, got %v", err)
+	}
+}
+
+func TestUsageRendersStringsValueLabelsAndDefaults(t *testing.T) {
+	spec := New("tool").
+		Strings("include", Short('I'), Description("path to include"), Default("src")).
+		Strings("exclude")
+
+	const want = `Usage: tool [flags]
+
+Flags:
+  -I, --include <value>  path to include (default "src")
+      --exclude <value>
+  -h, --help             show help
+`
+	if got := spec.Usage(); got != want {
+		t.Fatalf("unexpected strings usage:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func TestParseUsesGenericFullOrDisplayNameInErrors(t *testing.T) {
 	_, err := New("tool", "render").Parse([]string{"--wat"})
 	if err == nil || err.Error() != `unknown tool render flag "--wat"` {
@@ -545,4 +872,16 @@ func TestResultPositionalAccessorsReturnValuesAndCopies(t *testing.T) {
 	if got := result.Positional(0); got != "one" {
 		t.Fatalf("expected defensive positional copy, got %q", got)
 	}
+}
+
+func stringSlicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }

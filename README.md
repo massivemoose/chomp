@@ -3,10 +3,11 @@
 Chomp is a small, dependency-free Go package for parsing command flags and
 positionals, routing commands, and rendering readable usage text.
 
-It supports string and bool flags, long and single-short forms, interspersed
-flags and positionals, defaults, required flags, `--`, `--help`, and explicit
-command routing. Chomp intentionally does not provide shell completion,
-environment binding, lifecycle hooks, or command execution.
+It supports string, bool, int, duration, and repeated string flags; long and
+single-short forms; interspersed flags and positionals; defaults; required
+flags; `--`; `--help`; and explicit command routing. Chomp intentionally does
+not provide shell completion, environment binding, lifecycle hooks, or command
+execution.
 
 ## Install
 
@@ -77,6 +78,34 @@ the parser independent from process-global state is useful.
 
 Long bool flags accept separated values such as `--verbose false`. Short bool
 flags use `-v` or `-v=false`; a following argument remains positional.
+
+Common typed values are parsed directly:
+
+```go
+spec := chomp.New("deploy").
+	Int("replicas", chomp.Default("1")).
+	Duration("timeout", chomp.Default("2m")).
+	Strings("include")
+
+result, err := spec.Parse([]string{
+	"--replicas", "3",
+	"--timeout=30s",
+	"--include", "config",
+	"--include", "secrets",
+})
+if err != nil {
+	// Handle parse error.
+}
+
+fmt.Println(result.Int("replicas"))         // 3
+fmt.Println(result.Duration("timeout"))     // 30s
+fmt.Println(result.Strings("include"))      // [config secrets]
+fmt.Println(result.IsSet("replicas"))       // true
+fmt.Println(result.LastFlag("include"))     // include
+```
+
+Repeated `Strings` flags accumulate one value per occurrence. Scalar flags,
+including `String`, `Bool`, `Int`, and `Duration`, keep the last explicit value.
 
 `Usage()` returns stable unwrapped text. Use `UsageWidth(width)` to wrap flag
 descriptions to an explicit width while keeping output independent from the
@@ -179,7 +208,7 @@ go run ./examples/chompdemo app list --format json
 ```
 
 ```sh
-go run ./examples/chompdemo deploy api --env prod --image registry/app:v1 --dry-run
+go run ./examples/chompdemo deploy api --env prod --image registry/app:v1 --replicas 3 --timeout 30s --include config --include secrets --dry-run
 ```
 
 ```sh
@@ -202,7 +231,7 @@ go run ./examples/chompdemo wat
 
 Chomp focuses on parser, tiny router, and usage rendering:
 
-- string and bool flags;
+- string, bool, int, duration, and repeated string flags;
 - long flags and single-short aliases;
 - required flags, descriptions, defaults, and value labels;
 - positional arity;

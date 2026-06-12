@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -79,12 +81,14 @@ type flagKind int
 const (
 	flagKindString flagKind = iota
 	flagKindBool
+	flagKindInt
+	flagKindDuration
+	flagKindStrings
 )
 
 // Result contains parsed flag and positional values.
 type Result struct {
-	strings     map[string]string
-	bools       map[string]bool
+	values      map[string]any
 	seen        map[string]bool
 	flagOrder   []string
 	positionals []string
@@ -116,6 +120,21 @@ func (spec *Spec) Bool(name string, options ...FlagOption) *Spec {
 	return spec.flag(name, flagKindBool, options...)
 }
 
+// Int declares an int flag.
+func (spec *Spec) Int(name string, options ...FlagOption) *Spec {
+	return spec.flag(name, flagKindInt, options...)
+}
+
+// Duration declares a time.Duration flag.
+func (spec *Spec) Duration(name string, options ...FlagOption) *Spec {
+	return spec.flag(name, flagKindDuration, options...)
+}
+
+// Strings declares a repeated string flag.
+func (spec *Spec) Strings(name string, options ...FlagOption) *Spec {
+	return spec.flag(name, flagKindStrings, options...)
+}
+
 // Positionals declares the accepted positional count and usage names.
 func (spec *Spec) Positionals(min, max int, names ...string) *Spec {
 	spec.minPositionals = min
@@ -131,9 +150,8 @@ func (spec *Spec) Parse(args []string) (Result, error) {
 	}
 
 	result := Result{
-		strings: make(map[string]string),
-		bools:   make(map[string]bool),
-		seen:    make(map[string]bool),
+		values: make(map[string]any),
+		seen:   make(map[string]bool),
 	}
 	for _, flag := range spec.flagOrder {
 		if !flag.hasDefault {
@@ -141,9 +159,15 @@ func (spec *Spec) Parse(args []string) (Result, error) {
 		}
 		switch flag.kind {
 		case flagKindString:
-			result.strings[flag.name] = flag.defaultValue
+			result.values[flag.name] = flag.defaultValue
 		case flagKindBool:
-			result.bools[flag.name], _ = maybeBoolValue(flag.defaultValue)
+			result.values[flag.name], _ = maybeBoolValue(flag.defaultValue)
+		case flagKindInt:
+			result.values[flag.name], _ = strconv.Atoi(flag.defaultValue)
+		case flagKindDuration:
+			result.values[flag.name], _ = time.ParseDuration(flag.defaultValue)
+		case flagKindStrings:
+			result.values[flag.name] = []string{flag.defaultValue}
 		}
 	}
 
@@ -209,12 +233,35 @@ func (spec *Spec) ParseCommandLine() (Result, error) {
 
 // String returns a parsed string flag value.
 func (result Result) String(name string) string {
-	return result.strings[name]
+	value, _ := result.values[name].(string)
+	return value
 }
 
 // Bool returns a parsed bool flag value.
 func (result Result) Bool(name string) bool {
-	return result.bools[name]
+	value, _ := result.values[name].(bool)
+	return value
+}
+
+// Int returns a parsed int flag value.
+func (result Result) Int(name string) int {
+	value, _ := result.values[name].(int)
+	return value
+}
+
+// Duration returns a parsed time.Duration flag value.
+func (result Result) Duration(name string) time.Duration {
+	value, _ := result.values[name].(time.Duration)
+	return value
+}
+
+// Strings returns a copy of parsed repeated string flag values.
+func (result Result) Strings(name string) []string {
+	values, _ := result.values[name].([]string)
+	if values == nil {
+		return nil
+	}
+	return append([]string(nil), values...)
 }
 
 // IsSet reports whether a flag was explicitly present.
@@ -336,8 +383,8 @@ func (spec *Spec) Validate() error {
 
 func (spec *Spec) flag(name string, kind flagKind, options ...FlagOption) *Spec {
 	flag := &flagSpec{name: strings.TrimSpace(name), kind: kind}
-	if kind == flagKindString {
-		flag.valueName = "<value>"
+	if flag.takesValue() {
+		flag.valueName = flag.defaultValueName()
 	}
 	for _, option := range options {
 		if option != nil {
@@ -371,6 +418,16 @@ func (spec *Spec) flag(name string, kind flagKind, options ...FlagOption) *Spec 
 			spec.definitionErrs = append(spec.definitionErrs, fmt.Errorf("invalid default for --%s: %q", flag.name, flag.defaultValue))
 		}
 	}
+	if kind == flagKindInt && flag.hasDefault {
+		if _, err := strconv.Atoi(flag.defaultValue); err != nil {
+			spec.definitionErrs = append(spec.definitionErrs, fmt.Errorf("invalid default for --%s: %q", flag.name, flag.defaultValue))
+		}
+	}
+	if kind == flagKindDuration && flag.hasDefault {
+		if _, err := time.ParseDuration(flag.defaultValue); err != nil {
+			spec.definitionErrs = append(spec.definitionErrs, fmt.Errorf("invalid default for --%s: %q", flag.name, flag.defaultValue))
+		}
+	}
 	spec.flagOrder = append(spec.flagOrder, flag)
 	return spec
 }
@@ -393,7 +450,7 @@ func (spec *Spec) parseFlagValue(result *Result, flag *flagSpec, inlineValue str
 			}
 			value = args[*index]
 		}
-		result.strings[flag.name] = value
+		result.values[flag.name] = value
 	case flagKindBool:
 		value := true
 		if hasInlineValue {
@@ -408,7 +465,49 @@ func (spec *Spec) parseFlagValue(result *Result, flag *flagSpec, inlineValue str
 				value = parsed
 			}
 		}
-		result.bools[flag.name] = value
+		result.values[flag.name] = value
+	case flagKindInt:
+		value := inlineValue
+		if !hasInlineValue {
+			*index++
+			if *index >= len(args) {
+				return fmt.Errorf("%s --%s requires a value", spec.name(), flag.name)
+			}
+			value = args[*index]
+		}
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid --%s value %q: expected int", flag.name, value)
+		}
+		result.values[flag.name] = parsed
+	case flagKindDuration:
+		value := inlineValue
+		if !hasInlineValue {
+			*index++
+			if *index >= len(args) {
+				return fmt.Errorf("%s --%s requires a value", spec.name(), flag.name)
+			}
+			value = args[*index]
+		}
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return fmt.Errorf("invalid --%s value %q: expected duration", flag.name, value)
+		}
+		result.values[flag.name] = parsed
+	case flagKindStrings:
+		value := inlineValue
+		if !hasInlineValue {
+			*index++
+			if *index >= len(args) {
+				return fmt.Errorf("%s --%s requires a value", spec.name(), flag.name)
+			}
+			value = args[*index]
+		}
+		values, _ := result.values[flag.name].([]string)
+		if !result.seen[flag.name] {
+			values = nil
+		}
+		result.values[flag.name] = append(values, value)
 	}
 	result.seen[flag.name] = true
 	result.flagOrder = append(result.flagOrder, flag.name)
@@ -490,7 +589,7 @@ func (spec *Spec) positionalPlaceholders() string {
 
 func (flag *flagSpec) display() string {
 	long := "--" + flag.name
-	if flag.kind == flagKindString {
+	if flag.takesValue() {
 		long += " " + flag.valueName
 	}
 	if flag.short == 0 {
@@ -505,7 +604,7 @@ func (flag *flagSpec) usageDescription() string {
 		return description
 	}
 	defaultText := flag.defaultValue
-	if flag.kind == flagKindString {
+	if flag.kind == flagKindString || flag.kind == flagKindStrings {
 		defaultText = fmt.Sprintf("%q", defaultText)
 	} else if parsed, ok := maybeBoolValue(defaultText); ok {
 		defaultText = fmt.Sprint(parsed)
@@ -514,6 +613,21 @@ func (flag *flagSpec) usageDescription() string {
 		return "(default " + defaultText + ")"
 	}
 	return description + " (default " + defaultText + ")"
+}
+
+func (flag *flagSpec) takesValue() bool {
+	return flag.kind == flagKindString || flag.kind == flagKindInt || flag.kind == flagKindDuration || flag.kind == flagKindStrings
+}
+
+func (flag *flagSpec) defaultValueName() string {
+	switch flag.kind {
+	case flagKindInt:
+		return "<int>"
+	case flagKindDuration:
+		return "<duration>"
+	default:
+		return "<value>"
+	}
 }
 
 func valueLabel(name string) string {

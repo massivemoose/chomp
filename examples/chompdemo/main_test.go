@@ -73,14 +73,26 @@ format=json
 	result.wantStderr("")
 }
 
-func TestDeployParsesFlagsAndPositionals(t *testing.T) {
-	result := runDemo(t, []string{"deploy", "api", "--env", "prod", "--image", "registry/app:v1", "--dry-run"})
+func TestDeployParsesTypedFlagsAndPositionals(t *testing.T) {
+	result := runDemo(t, []string{
+		"deploy", "api",
+		"--env", "prod",
+		"--image", "registry/app:v1",
+		"--replicas", "3",
+		"--timeout", "30s",
+		"--include", "config",
+		"--include", "secrets",
+		"--dry-run",
+	})
 
 	result.wantCode(0)
 	result.wantStdout(`command=deploy
 app=api
 env=prod
 image=registry/app:v1
+replicas=3
+timeout=30s
+include=config,secrets
 dry-run=true
 `)
 	result.wantStderr("")
@@ -131,6 +143,9 @@ func TestParserErrorReturnsUsage(t *testing.T) {
 	result.wantStdoutContains(
 		"Usage: chompdemo deploy [flags] <app>\n\n",
 		"--image <ref>",
+		"--replicas <int>",
+		"--timeout <duration>",
+		"--include <value>",
 		"-h, --help",
 	)
 	result.wantStderr("")
