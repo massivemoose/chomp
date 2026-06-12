@@ -748,6 +748,90 @@ Flags:
 	}
 }
 
+func TestParseStringsAccumulatesRepeatedValues(t *testing.T) {
+	result, err := New("tool").
+		Strings("include", Short('I')).
+		Parse([]string{"--include=src", "--include", "docs", "-I", "test", "-I=", "--include=a,b"})
+	if err != nil {
+		t.Fatalf("expected parse to succeed, got %v", err)
+	}
+
+	want := []string{"src", "docs", "test", "", "a,b"}
+	if got := result.Strings("include"); !stringSlicesEqual(got, want) {
+		t.Fatalf("expected accumulated strings %#v, got %#v", want, got)
+	}
+	if !result.IsSet("include") {
+		t.Fatal("expected explicit strings flag to be marked set")
+	}
+	if got := result.LastFlag("include"); got != "include" {
+		t.Fatalf("expected strings occurrence in LastFlag, got %q", got)
+	}
+}
+
+func TestParseStringsDefaultsAndExplicitReplacement(t *testing.T) {
+	result, err := New("tool").
+		Strings("include", Default("src")).
+		Parse(nil)
+	if err != nil {
+		t.Fatalf("expected parse to succeed, got %v", err)
+	}
+	if got, want := result.Strings("include"), []string{"src"}; !stringSlicesEqual(got, want) {
+		t.Fatalf("expected strings default %#v, got %#v", want, got)
+	}
+	if result.IsSet("include") {
+		t.Fatal("expected defaulted strings flag not to be marked set")
+	}
+
+	result, err = New("tool").
+		Strings("include", Default("src")).
+		Parse([]string{"--include", "test", "--include", "docs"})
+	if err != nil {
+		t.Fatalf("expected parse to succeed, got %v", err)
+	}
+	if got, want := result.Strings("include"), []string{"test", "docs"}; !stringSlicesEqual(got, want) {
+		t.Fatalf("expected explicit strings to replace default with %#v, got %#v", want, got)
+	}
+}
+
+func TestResultStringsReturnsDefensiveCopy(t *testing.T) {
+	result, err := New("tool").
+		Strings("include").
+		Parse([]string{"--include", "src"})
+	if err != nil {
+		t.Fatalf("expected parse to succeed, got %v", err)
+	}
+
+	values := result.Strings("include")
+	values[0] = "changed"
+	if got, want := result.Strings("include"), []string{"src"}; !stringSlicesEqual(got, want) {
+		t.Fatalf("expected defensive copy %#v, got %#v", want, got)
+	}
+}
+
+func TestParseRejectsMissingStringsValue(t *testing.T) {
+	_, err := New("tool").Strings("include").Parse([]string{"--include"})
+	if err == nil || err.Error() != "tool --include requires a value" {
+		t.Fatalf("expected missing strings value error, got %v", err)
+	}
+}
+
+func TestUsageRendersStringsValueLabelsAndDefaults(t *testing.T) {
+	spec := New("tool").
+		Strings("include", Short('I'), Description("path to include"), Default("src")).
+		Strings("exclude")
+
+	const want = `Usage: tool [flags]
+
+Flags:
+  -I, --include <value>  path to include (default "src")
+      --exclude <value>
+  -h, --help             show help
+`
+	if got := spec.Usage(); got != want {
+		t.Fatalf("unexpected strings usage:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func TestParseUsesGenericFullOrDisplayNameInErrors(t *testing.T) {
 	_, err := New("tool", "render").Parse([]string{"--wat"})
 	if err == nil || err.Error() != `unknown tool render flag "--wat"` {
@@ -788,4 +872,16 @@ func TestResultPositionalAccessorsReturnValuesAndCopies(t *testing.T) {
 	if got := result.Positional(0); got != "one" {
 		t.Fatalf("expected defensive positional copy, got %q", got)
 	}
+}
+
+func stringSlicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
