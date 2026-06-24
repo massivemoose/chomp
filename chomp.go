@@ -13,7 +13,7 @@ import (
 // ErrHelp is returned when help was requested.
 var ErrHelp = errors.New("help")
 
-// FlagOption configures a string or bool flag.
+// FlagOption configures a flag.
 type FlagOption func(*flagSpec)
 
 // Required marks a flag as required.
@@ -52,6 +52,14 @@ func ValueName(name string) FlagOption {
 	}
 }
 
+// OneOf restricts a string or repeated string flag to the provided values.
+func OneOf(values ...string) FlagOption {
+	return func(flag *flagSpec) {
+		flag.oneOf = append([]string(nil), values...)
+		flag.hasOneOf = true
+	}
+}
+
 // Spec defines a command's accepted flags and positionals.
 type Spec struct {
 	command         string
@@ -74,6 +82,8 @@ type flagSpec struct {
 	defaultValue string
 	hasDefault   bool
 	valueName    string
+	oneOf        []string
+	hasOneOf     bool
 }
 
 type flagKind int
@@ -357,15 +367,21 @@ func (spec *Spec) usage(width int) string {
 
 		switch {
 		case width <= 0:
-			fmt.Fprintf(&builder, "%*s  %s", widest-utf8.RuneCountInString(row.display), "", row.description)
+			lines := strings.Split(row.description, "\n")
+			fmt.Fprintf(&builder, "%*s  %s", widest-utf8.RuneCountInString(row.display), "", lines[0])
+			for _, line := range lines[1:] {
+				fmt.Fprintf(&builder, "\n%*s%s", descriptionColumn, "", line)
+			}
 		case stackDescriptions:
 			builder.WriteByte('\n')
-			for _, line := range wrapText(row.description, width-stackedDescriptionIndent) {
-				fmt.Fprintf(&builder, "%*s%s\n", stackedDescriptionIndent, "", line)
+			for _, description := range strings.Split(row.description, "\n") {
+				for _, line := range wrapText(description, width-stackedDescriptionIndent) {
+					fmt.Fprintf(&builder, "%*s%s\n", stackedDescriptionIndent, "", line)
+				}
 			}
 			continue
 		default:
-			lines := wrapText(row.description, width-descriptionColumn)
+			lines := wrapDescription(row.description, width-descriptionColumn)
 			fmt.Fprintf(&builder, "%*s  %s", widest-utf8.RuneCountInString(row.display), "", lines[0])
 			for _, line := range lines[1:] {
 				fmt.Fprintf(&builder, "\n%*s%s", descriptionColumn, "", line)
@@ -428,6 +444,7 @@ func (spec *Spec) flag(name string, kind flagKind, options ...FlagOption) *Spec 
 			spec.definitionErrs = append(spec.definitionErrs, fmt.Errorf("invalid default for --%s: %q", flag.name, flag.defaultValue))
 		}
 	}
+	spec.validateOneOf(flag)
 	spec.flagOrder = append(spec.flagOrder, flag)
 	return spec
 }
@@ -437,6 +454,31 @@ func (spec *Spec) name() string {
 		return spec.displayName
 	}
 	return spec.command
+}
+
+func (spec *Spec) validateOneOf(flag *flagSpec) {
+	if !flag.hasOneOf {
+		return
+	}
+	if flag.kind != flagKindString && flag.kind != flagKindStrings {
+		spec.definitionErrs = append(spec.definitionErrs, fmt.Errorf("--%s cannot use OneOf on %s flag", flag.name, flag.kind.kindName()))
+		return
+	}
+	if len(flag.oneOf) == 0 {
+		spec.definitionErrs = append(spec.definitionErrs, fmt.Errorf("--%s OneOf requires at least one value", flag.name))
+		return
+	}
+	seen := make(map[string]bool, len(flag.oneOf))
+	for _, value := range flag.oneOf {
+		if seen[value] {
+			spec.definitionErrs = append(spec.definitionErrs, fmt.Errorf("duplicate OneOf value %q for --%s", value, flag.name))
+			return
+		}
+		seen[value] = true
+	}
+	if flag.hasDefault && !flag.allows(flag.defaultValue) {
+		spec.definitionErrs = append(spec.definitionErrs, fmt.Errorf("invalid default for --%s: %q; expected %s", flag.name, flag.defaultValue, flag.oneOfDescription()))
+	}
 }
 
 func (spec *Spec) parseFlagValue(result *Result, flag *flagSpec, inlineValue string, hasInlineValue, allowSeparatedBool bool, args []string, index *int) error {
@@ -449,6 +491,9 @@ func (spec *Spec) parseFlagValue(result *Result, flag *flagSpec, inlineValue str
 				return fmt.Errorf("%s --%s requires a value", spec.name(), flag.name)
 			}
 			value = args[*index]
+		}
+		if err := flag.validateStringValue(value); err != nil {
+			return err
 		}
 		result.values[flag.name] = value
 	case flagKindBool:
@@ -502,6 +547,9 @@ func (spec *Spec) parseFlagValue(result *Result, flag *flagSpec, inlineValue str
 				return fmt.Errorf("%s --%s requires a value", spec.name(), flag.name)
 			}
 			value = args[*index]
+		}
+		if err := flag.validateStringValue(value); err != nil {
+			return err
 		}
 		values, _ := result.values[flag.name].([]string)
 		if !result.seen[flag.name] {
@@ -600,6 +648,14 @@ func (flag *flagSpec) display() string {
 
 func (flag *flagSpec) usageDescription() string {
 	description := flag.description
+	if flag.hasOneOf && len(flag.oneOf) > 0 {
+		oneOf := "(" + flag.oneOfDescription() + ")"
+		if description == "" {
+			description = oneOf
+		} else {
+			description += " " + oneOf
+		}
+	}
 	if !flag.hasDefault {
 		return description
 	}
@@ -612,7 +668,34 @@ func (flag *flagSpec) usageDescription() string {
 	if description == "" {
 		return "(default " + defaultText + ")"
 	}
+	if flag.hasOneOf {
+		return description + "\n(default " + defaultText + ")"
+	}
 	return description + " (default " + defaultText + ")"
+}
+
+func (flag *flagSpec) validateStringValue(value string) error {
+	if !flag.hasOneOf || flag.allows(value) {
+		return nil
+	}
+	return fmt.Errorf("invalid --%s value %q: expected %s", flag.name, value, flag.oneOfDescription())
+}
+
+func (flag *flagSpec) allows(value string) bool {
+	for _, allowed := range flag.oneOf {
+		if allowed == value {
+			return true
+		}
+	}
+	return false
+}
+
+func (flag *flagSpec) oneOfDescription() string {
+	quoted := make([]string, len(flag.oneOf))
+	for index, value := range flag.oneOf {
+		quoted[index] = fmt.Sprintf("%q", value)
+	}
+	return "one of " + strings.Join(quoted, ", ")
 }
 
 func (flag *flagSpec) takesValue() bool {
@@ -627,6 +710,23 @@ func (flag *flagSpec) defaultValueName() string {
 		return "<duration>"
 	default:
 		return "<value>"
+	}
+}
+
+func (flag flagKind) kindName() string {
+	switch flag {
+	case flagKindString:
+		return "string"
+	case flagKindBool:
+		return "bool"
+	case flagKindInt:
+		return "int"
+	case flagKindDuration:
+		return "duration"
+	case flagKindStrings:
+		return "strings"
+	default:
+		return "unknown"
 	}
 }
 
@@ -659,6 +759,14 @@ func wrapText(text string, width int) []string {
 		line = word
 	}
 	return append(lines, line)
+}
+
+func wrapDescription(description string, width int) []string {
+	var lines []string
+	for _, part := range strings.Split(description, "\n") {
+		lines = append(lines, wrapText(part, width)...)
+	}
+	return lines
 }
 
 func commandPath(parts ...string) string {

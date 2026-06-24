@@ -73,6 +73,17 @@ format=json
 	result.wantStderr("")
 }
 
+func TestAppListRejectsUnknownFormat(t *testing.T) {
+	result := runDemo(t, []string{"app", "list", "--format", "xml"})
+
+	result.wantCode(2)
+	result.wantStdoutContains(
+		"Usage: chompdemo app list [flags]\n\n",
+		`output format name (one of "table", "json")`,
+	)
+	result.wantStderr("")
+}
+
 func TestDeployParsesTypedFlagsAndPositionals(t *testing.T) {
 	result := runDemo(t, []string{
 		"deploy", "api",
@@ -95,6 +106,21 @@ timeout=30s
 include=config,secrets
 dry-run=true
 `)
+	result.wantStderr("")
+}
+
+func TestDeployRejectsUnknownEnvironment(t *testing.T) {
+	result := runDemo(t, []string{
+		"deploy", "api",
+		"--env", "qa",
+		"--image", "registry/app:v1",
+	})
+
+	result.wantCode(2)
+	result.wantStdoutContains(
+		"Usage: chompdemo deploy [flags] <app>\n\n",
+		"target environment (one of \"dev\", \"staging\", \"prod\")\n                            (default \"dev\")",
+	)
 	result.wantStderr("")
 }
 

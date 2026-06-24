@@ -768,6 +768,130 @@ func TestParseStringsAccumulatesRepeatedValues(t *testing.T) {
 	}
 }
 
+func TestParseStringOneOfAcceptsValidValuesAndRejectsInvalidValues(t *testing.T) {
+	result, err := New("tool").
+		String("format", OneOf("json", "table")).
+		Parse([]string{"--format=json"})
+	if err != nil {
+		t.Fatalf("expected parse to succeed, got %v", err)
+	}
+	if got := result.String("format"); got != "json" {
+		t.Fatalf("expected parsed format, got %q", got)
+	}
+
+	_, err = New("tool").
+		String("format", OneOf("json", "table")).
+		Parse([]string{"--format=xml"})
+	if err == nil || err.Error() != `invalid --format value "xml": expected one of "json", "table"` {
+		t.Fatalf("expected invalid OneOf error, got %v", err)
+	}
+}
+
+func TestParseStringsOneOfValidatesEachValue(t *testing.T) {
+	result, err := New("tool").
+		Strings("include", OneOf("src", "docs")).
+		Parse([]string{"--include=src", "--include", "docs"})
+	if err != nil {
+		t.Fatalf("expected parse to succeed, got %v", err)
+	}
+	if got, want := result.Strings("include"), []string{"src", "docs"}; !stringSlicesEqual(got, want) {
+		t.Fatalf("expected repeated strings %#v, got %#v", want, got)
+	}
+
+	_, err = New("tool").
+		Strings("include", OneOf("src", "docs")).
+		Parse([]string{"--include=src", "--include=test"})
+	if err == nil || err.Error() != `invalid --include value "test": expected one of "src", "docs"` {
+		t.Fatalf("expected invalid repeated OneOf error, got %v", err)
+	}
+}
+
+func TestParseOneOfMatchingIsExactAndAllowsEmptyString(t *testing.T) {
+	_, err := New("tool").
+		String("format", OneOf("json", "table")).
+		Parse([]string{"--format=JSON"})
+	if err == nil || err.Error() != `invalid --format value "JSON": expected one of "json", "table"` {
+		t.Fatalf("expected case-sensitive OneOf error, got %v", err)
+	}
+
+	result, err := New("tool").
+		String("mode", OneOf("", "auto")).
+		Parse([]string{"--mode="})
+	if err != nil {
+		t.Fatalf("expected explicit empty value to be accepted, got %v", err)
+	}
+	if got := result.String("mode"); got != "" {
+		t.Fatalf("expected empty mode, got %q", got)
+	}
+}
+
+func TestValidateOneOfDefaults(t *testing.T) {
+	err := New("tool").
+		String("format", OneOf("json", "table"), Default("table")).
+		Validate()
+	if err != nil {
+		t.Fatalf("expected valid OneOf default, got %v", err)
+	}
+
+	spec := New("tool").
+		String("format", OneOf("json", "table"), Default("xml"))
+	err = spec.Validate()
+	if err == nil || err.Error() != `invalid default for --format: "xml"; expected one of "json", "table"` {
+		t.Fatalf("expected invalid OneOf default, got %v", err)
+	}
+
+	_, parseErr := spec.Parse(nil)
+	if parseErr == nil || parseErr.Error() != err.Error() {
+		t.Fatalf("expected Parse to return validation error %q, got %v", err, parseErr)
+	}
+}
+
+func TestValidateOneOfDefinitionErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		spec *Spec
+		want string
+	}{
+		{"empty values", New("tool").String("format", OneOf()), "--format OneOf requires at least one value"},
+		{"duplicate values", New("tool").String("format", OneOf("json", "json")), `duplicate OneOf value "json" for --format`},
+		{"bool", New("tool").Bool("enabled", OneOf("yes")), "--enabled cannot use OneOf on bool flag"},
+		{"int", New("tool").Int("count", OneOf("1")), "--count cannot use OneOf on int flag"},
+		{"duration", New("tool").Duration("timeout", OneOf("1s")), "--timeout cannot use OneOf on duration flag"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.spec.Validate()
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected error containing %q, got %v", tt.want, err)
+			}
+
+			_, parseErr := tt.spec.Parse(nil)
+			if parseErr == nil || parseErr.Error() != err.Error() {
+				t.Fatalf("expected Parse to return validation error %q, got %v", err, parseErr)
+			}
+		})
+	}
+}
+
+func TestUsageRendersOneOfChoices(t *testing.T) {
+	spec := New("tool").
+		String("format", Description("output format"), OneOf("json", "table"), Default("table")).
+		String("mode", OneOf("auto", "manual"))
+
+	const want = `Usage: tool [flags]
+
+Flags:
+      --format <value>  output format (one of "json", "table")
+                        (default "table")
+      --mode <value>    (one of "auto", "manual")
+  -h, --help            show help
+`
+	if got := spec.Usage(); got != want {
+		t.Fatalf("unexpected OneOf usage:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func TestParseStringsDefaultsAndExplicitReplacement(t *testing.T) {
 	result, err := New("tool").
 		Strings("include", Default("src")).
