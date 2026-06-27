@@ -152,6 +152,7 @@ func appListSpec() *chomp.Spec {
 			chomp.Default("table"),
 			chomp.ValueName("name"),
 			chomp.Description("output format name"),
+			chomp.OneOf("table", "json"),
 		).
 		Positionals(0, 0)
 }
@@ -263,6 +264,7 @@ func deploySpec() *chomp.Spec {
 			chomp.Default("dev"),
 			chomp.ValueName("name"),
 			chomp.Description("target environment"),
+			chomp.OneOf("dev", "staging", "prod"),
 		).
 		String("image",
 			chomp.Required(),

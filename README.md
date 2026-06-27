@@ -3,11 +3,11 @@
 Chomp is a small, dependency-free Go package for parsing command flags and
 positionals, routing commands, and rendering readable usage text.
 
-It supports string, bool, int, duration, and repeated string flags; long and
-single-short forms; interspersed flags and positionals; defaults; required
-flags; `--`; `--help`; and explicit command routing. Chomp intentionally does
-not provide shell completion, environment binding, lifecycle hooks, or command
-execution.
+It supports string, bool, int, duration, and repeated string flags; exact
+string value validation; long and single-short forms; interspersed flags and
+positionals; defaults; required flags; `--`; `--help`; and explicit command
+routing. Chomp intentionally does not provide shell completion, environment
+binding, lifecycle hooks, or command execution.
 
 ## Install
 
@@ -35,6 +35,7 @@ func main() {
 			chomp.Default("table"),
 			chomp.ValueName("name"),
 			chomp.Description("output format"),
+			chomp.OneOf("table", "json"),
 		).
 		Bool("verbose",
 			chomp.Short('v'),
@@ -106,6 +107,15 @@ fmt.Println(result.LastFlag("include"))     // include
 
 Repeated `Strings` flags accumulate one value per occurrence. Scalar flags,
 including `String`, `Bool`, `Int`, and `Duration`, keep the last explicit value.
+
+Use `OneOf` to restrict string values. Matching is exact and case-sensitive,
+and generated usage includes the allowed values:
+
+```go
+spec := chomp.New("report").
+	String("format", chomp.OneOf("table", "json"), chomp.Default("table")).
+	Strings("include", chomp.OneOf("src", "docs"))
+```
 
 `Usage()` returns stable unwrapped text. Use `UsageWidth(width)` to wrap flag
 descriptions to an explicit width while keeping output independent from the
@@ -233,7 +243,7 @@ Chomp focuses on parser, tiny router, and usage rendering:
 
 - string, bool, int, duration, and repeated string flags;
 - long flags and single-short aliases;
-- required flags, descriptions, defaults, and value labels;
+- required flags, descriptions, defaults, value labels, and exact string value validation;
 - positional arity;
 - explicit nested command dispatch;
 - stable plain-text usage.
