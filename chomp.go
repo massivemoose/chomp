@@ -5,7 +5,9 @@ import "errors"
 // ErrHelp is returned when help was requested.
 var ErrHelp = errors.New("help")
 
-// Spec defines a command's accepted flags and positionals.
+// Spec defines a command's accepted flags and positionals. After configuration
+// is complete, a Spec may be parsed, validated, and rendered concurrently.
+// Configuration methods must not run concurrently with those operations.
 type Spec struct {
 	command         string
 	displayName     string

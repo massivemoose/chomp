@@ -1022,6 +1022,38 @@ func TestResultPositionalAccessorsReturnValuesAndCopies(t *testing.T) {
 	}
 }
 
+func FuzzParse(f *testing.F) {
+	spec := New("fuzz").
+		String("format", Short('f'), Default("table"), OneOf("table", "json")).
+		Bool("verbose", Short('v')).
+		Int("count", Short('c'), Default("0")).
+		Duration("timeout", Short('t'), Default("1s")).
+		Strings("include", Short('I')).
+		Positionals(0, 3)
+
+	f.Add([]byte{})
+	f.Add([]byte("--format\x00json\x00-v\x00--count\x003\x00--timeout\x00250ms\x00-I\x00one\x00input"))
+	f.Add([]byte("--\x00--help"))
+
+	f.Fuzz(func(t *testing.T, input []byte) {
+		var args []string
+		if len(input) > 0 {
+			args = strings.Split(string(input), "\x00")
+		}
+
+		result, err := spec.Parse(args)
+		if err != nil {
+			return
+		}
+		if got := len(result.Positionals()); got > 3 {
+			t.Fatalf("accepted %d positionals, max is 3", got)
+		}
+		if last := result.LastFlag("format", "verbose", "count", "timeout", "include"); last != "" && !result.IsSet(last) {
+			t.Fatalf("last flag %q was not marked as explicitly set", last)
+		}
+	})
+}
+
 func stringSlicesEqual(left, right []string) bool {
 	if len(left) != len(right) {
 		return false
