@@ -3,6 +3,7 @@ package chomp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -24,21 +25,33 @@ func TestRouterDispatchesKnownCommand(t *testing.T) {
 func TestRouterReturnsUsageForRootHelp(t *testing.T) {
 	router := NewRouter("ovek", "Ovek CLI")
 
-	for _, args := range [][]string{nil, {"help"}, {"--help"}, {"-h"}} {
-		err := router.Run(context.Background(), args)
+	tests := []struct {
+		args     []string
+		wantHelp bool
+	}{
+		{args: nil},
+		{args: []string{"help"}, wantHelp: true},
+		{args: []string{"--help"}, wantHelp: true},
+		{args: []string{"-h"}, wantHelp: true},
+	}
+	for _, tt := range tests {
+		err := router.Run(context.Background(), tt.args)
 		if !errors.Is(err, ErrUsage) {
-			t.Fatalf("expected ErrUsage for %#v, got %v", args, err)
+			t.Fatalf("expected ErrUsage for %#v, got %v", tt.args, err)
+		}
+		if got := errors.Is(err, ErrHelp); got != tt.wantHelp {
+			t.Fatalf("expected ErrHelp=%t for %#v, got %v", tt.wantHelp, tt.args, err)
 		}
 		compatCommand, ok := UsageCommand(err)
 		if !ok {
-			t.Fatalf("expected root usage command for %#v, got %v", args, err)
+			t.Fatalf("expected root usage command for %#v, got %v", tt.args, err)
 		}
 		if compatCommand != router {
 			t.Fatalf("expected root usage command %p, got %p", router, compatCommand)
 		}
 		usageCommand, path, ok := UsageTarget(err)
 		if !ok {
-			t.Fatalf("expected root usage target for %#v, got %v", args, err)
+			t.Fatalf("expected root usage target for %#v, got %v", tt.args, err)
 		}
 		if usageCommand != router {
 			t.Fatalf("expected root usage command %p, got %p", router, usageCommand)
@@ -57,6 +70,9 @@ func TestRouterReturnsCommandUsageForCommandHelp(t *testing.T) {
 		err := router.Run(context.Background(), args)
 		if !errors.Is(err, ErrUsage) {
 			t.Fatalf("expected ErrUsage for %#v, got %v", args, err)
+		}
+		if !errors.Is(err, ErrHelp) {
+			t.Fatalf("expected ErrHelp for %#v, got %v", args, err)
 		}
 
 		usageCommand, ok := UsageCommand(err)
@@ -77,6 +93,9 @@ func TestRouterPreservesNestedUsageError(t *testing.T) {
 	err := router.Run(context.Background(), []string{"auth", "key", "--help"})
 	if !errors.Is(err, ErrUsage) {
 		t.Fatalf("expected ErrUsage, got %v", err)
+	}
+	if !errors.Is(err, ErrHelp) {
+		t.Fatalf("expected ErrHelp, got %v", err)
 	}
 
 	usageCommand, ok := UsageCommand(err)
@@ -176,6 +195,9 @@ func TestRouterReturnsParentUsageTargetWhenGroupCommandReturnsUsage(t *testing.T
 	if !errors.Is(err, ErrUsage) {
 		t.Fatalf("expected ErrUsage, got %v", err)
 	}
+	if errors.Is(err, ErrHelp) {
+		t.Fatalf("did not expect ErrHelp, got %v", err)
+	}
 	command, path, ok := UsageTarget(err)
 	if !ok {
 		t.Fatalf("expected usage target, got %v", err)
@@ -185,6 +207,39 @@ func TestRouterReturnsParentUsageTargetWhenGroupCommandReturnsUsage(t *testing.T
 	}
 	if got := strings.Join(path, " "); got != "ovek" {
 		t.Fatalf("expected usage path %q, got %q", "ovek", got)
+	}
+}
+
+func TestRouterPreservesWrappedUsageErrorDetails(t *testing.T) {
+	cause := fmt.Errorf("invalid flags: %w", ErrUsage)
+	command := &recordingCommand{name: "deploy", err: cause}
+	router := NewRouter("tool", "", command)
+
+	err := router.Run(context.Background(), []string{"deploy"})
+	if err == nil || err.Error() != "invalid flags: usage" {
+		t.Fatalf("expected detailed usage error, got %v", err)
+	}
+	if !errors.Is(err, ErrUsage) {
+		t.Fatalf("expected ErrUsage, got %v", err)
+	}
+	if errors.Is(err, ErrHelp) {
+		t.Fatalf("did not expect ErrHelp, got %v", err)
+	}
+	usageCommand, _, ok := UsageTarget(err)
+	if !ok || usageCommand != command {
+		t.Fatalf("expected deploy usage target, got %v", err)
+	}
+}
+
+func TestRouterPreservesExistingUsageError(t *testing.T) {
+	leaf := &recordingCommand{name: "leaf"}
+	want := &UsageError{Command: leaf, Path: []string{"custom"}, Cause: ErrHelp}
+	command := &recordingCommand{name: "command", err: want}
+	router := NewRouter("tool", "", command)
+
+	got := router.Run(context.Background(), []string{"command"})
+	if got != want {
+		t.Fatalf("expected existing UsageError %p, got %p", want, got)
 	}
 }
 
