@@ -72,6 +72,8 @@ report --help
 Defaults are returned as parsed values, while `Result.IsSet` reports whether
 the user explicitly supplied a flag. Required flags are presence-based, so an
 explicit empty string or explicit false bool still satisfies `Required()`.
+Typed result accessors return their zero value for absent names or mismatched
+flag types; `Strings` returns `nil`.
 
 `ParseCommandLine` parses the current process arguments after the executable
 name. Use `Parse(args)` when arguments come from another source or when keeping

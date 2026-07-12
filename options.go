@@ -32,7 +32,7 @@ func Default(value string) FlagOption {
 	}
 }
 
-// ValueName sets the string flag's value label in usage text.
+// ValueName sets a value-taking flag's value label in usage text.
 func ValueName(name string) FlagOption {
 	return func(flag *flagSpec) {
 		flag.valueName = valueLabel(name)

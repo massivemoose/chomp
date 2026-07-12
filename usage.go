@@ -11,7 +11,8 @@ func (spec *Spec) Usage() string {
 	return spec.usage(0)
 }
 
-// UsageWidth returns stable plain-text usage with descriptions wrapped to width.
+// UsageWidth returns stable plain-text usage with descriptions wrapped to
+// width. Widths count Unicode code points, not terminal display cells.
 func (spec *Spec) UsageWidth(width int) string {
 	if width <= 0 {
 		return spec.Usage()
