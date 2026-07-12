@@ -177,6 +177,16 @@ func TestParserErrorReturnsUsage(t *testing.T) {
 	result.wantStderr("")
 }
 
+func TestLiteralHelpValuesDoNotMakeInvalidUsageSuccessful(t *testing.T) {
+	for _, value := range []string{"help", "--help"} {
+		result := runDemo(t, []string{"deploy", "--", value})
+
+		result.wantCode(2)
+		result.wantStdoutContains("Usage: chompdemo deploy [flags] <app>\n\n")
+		result.wantStderr("")
+	}
+}
+
 func TestProcessHelpExitsSuccessfully(t *testing.T) {
 	result := runProcess(t, "help")
 

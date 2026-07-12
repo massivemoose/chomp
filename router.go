@@ -46,18 +46,31 @@ type HiddenCommand interface {
 	Hidden() bool
 }
 
-// UsageError wraps ErrUsage with the command whose usage should be shown.
+// UsageError identifies the command whose usage should be shown.
 type UsageError struct {
 	Command Command
 	Path    []string
+	Cause   error
 }
 
 func (err *UsageError) Error() string {
+	if err.Cause != nil {
+		return err.Cause.Error()
+	}
 	return ErrUsage.Error()
 }
 
 func (err *UsageError) Unwrap() error {
+	if err.Cause != nil {
+		return err.Cause
+	}
 	return ErrUsage
+}
+
+// Is keeps every UsageError compatible with ErrUsage while Unwrap exposes
+// a more specific cause such as ErrHelp.
+func (err *UsageError) Is(target error) bool {
+	return target == ErrUsage
 }
 
 // UsageCommand returns the command whose usage should be shown.
@@ -156,7 +169,7 @@ func dispatch(ctx context.Context, command Command, path []string, args []string
 	if len(args) > 0 {
 		switch {
 		case isHelpArg(args[0]):
-			return &UsageError{Command: command, Path: copyPath(path)}
+			return &UsageError{Command: command, Path: copyPath(path), Cause: ErrHelp}
 		case args[0] == "help":
 			return dispatchHelp(command, path, args[1:])
 		}
@@ -178,7 +191,7 @@ func dispatch(ctx context.Context, command Command, path []string, args []string
 			return err
 		}
 		if errors.Is(err, ErrUsage) || errors.Is(err, ErrHelp) {
-			return &UsageError{Command: command, Path: copyPath(path)}
+			return &UsageError{Command: command, Path: copyPath(path), Cause: err}
 		}
 		return err
 	}
@@ -187,7 +200,7 @@ func dispatch(ctx context.Context, command Command, path []string, args []string
 
 func dispatchHelp(command Command, path []string, args []string) error {
 	if len(args) == 0 {
-		return &UsageError{Command: command, Path: copyPath(path)}
+		return &UsageError{Command: command, Path: copyPath(path), Cause: ErrHelp}
 	}
 
 	target := command
@@ -200,7 +213,7 @@ func dispatchHelp(command Command, path []string, args []string) error {
 		targetPath = append(targetPath, target.Name())
 		target = child
 	}
-	return &UsageError{Command: target, Path: targetPath}
+	return &UsageError{Command: target, Path: targetPath, Cause: ErrHelp}
 }
 
 func findChild(command Command, name string) (Command, bool) {

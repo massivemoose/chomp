@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -19,7 +20,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err := router.Run(context.Background(), args); err != nil {
 		if command, path, ok := chomp.UsageTarget(err); ok {
 			chomp.WriteCommandUsage(stdout, command, path)
-			if helpRequested(args) {
+			if errors.Is(err, chomp.ErrHelp) {
 				return 0
 			}
 			return 2
@@ -28,15 +29,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
-}
-
-func helpRequested(args []string) bool {
-	for _, arg := range args {
-		if arg == "help" || arg == "-h" || arg == "--help" {
-			return true
-		}
-	}
-	return false
 }
 
 type rootRouter struct {
@@ -63,8 +55,11 @@ func (router *rootRouter) Usage(w io.Writer) {
 }
 
 func (router *rootRouter) Run(ctx context.Context, args []string) error {
-	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || (args[0] == "help" && len(args) == 1) {
+	if len(args) == 0 {
 		return &chomp.UsageError{Command: router}
+	}
+	if args[0] == "-h" || args[0] == "--help" || (args[0] == "help" && len(args) == 1) {
+		return &chomp.UsageError{Command: router, Cause: chomp.ErrHelp}
 	}
 	return router.Router.Run(ctx, args)
 }

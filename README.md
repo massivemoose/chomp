@@ -143,7 +143,10 @@ router := chomp.NewRouter("tool", "Project tool.", StatusCommand{})
 if err := router.Run(context.Background(), os.Args[1:]); err != nil {
 	if command, path, ok := chomp.UsageTarget(err); ok {
 		chomp.WriteCommandUsage(os.Stdout, command, path)
-		return
+		if errors.Is(err, chomp.ErrHelp) {
+			return
+		}
+		os.Exit(2)
 	}
 	fmt.Fprintln(os.Stderr, err)
 	os.Exit(1)

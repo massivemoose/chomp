@@ -185,8 +185,9 @@ func TestUsageWidthNonPositiveMatchesUsage(t *testing.T) {
 
 func TestValidateAcceptsValidDefinition(t *testing.T) {
 	err := New("tool").
-		String("output", Short('o'), Default(""), ValueName("path")).
+		String(" output ", Short('o'), Default(""), ValueName("path")).
 		Bool("verbose", Short('v'), Default("yes")).
+		Bool("é", Short('界')).
 		Validate()
 	if err != nil {
 		t.Fatalf("expected valid definition, got %v", err)
@@ -204,6 +205,17 @@ func TestValidateRecordsDefinitionErrors(t *testing.T) {
 		{"duplicate short", New("tool").String("output", Short('o')).Bool("overwrite", Short('o')), `duplicate short flag "-o"`},
 		{"reserved long help", New("tool").Bool("help"), `reserved flag "--help"`},
 		{"reserved short help", New("tool").Bool("hello", Short('h')), `reserved short flag "-h"`},
+		{"leading hyphen long", New("tool").Bool("-verbose"), `flag name cannot start with "-": "-verbose"`},
+		{"equals long", New("tool").Bool("log=level"), `flag name cannot contain "=": "log=level"`},
+		{"whitespace long", New("tool").Bool("log level"), `flag name cannot contain whitespace: "log level"`},
+		{"unicode whitespace long", New("tool").Bool("log\u2003level"), `flag name cannot contain whitespace: "log\u2003level"`},
+		{"hyphen short", New("tool").Bool("verbose", Short('-')), `invalid short flag "-"`},
+		{"equals short", New("tool").Bool("verbose", Short('=')), `invalid short flag "="`},
+		{"whitespace short", New("tool").Bool("verbose", Short(' ')), `invalid short flag " "`},
+		{"unicode whitespace short", New("tool").Bool("verbose", Short('\u2003')), `invalid short flag "\u2003"`},
+		{"negative positional minimum", New("tool").Positionals(-1, -1), "positional minimum cannot be negative: -1"},
+		{"invalid positional maximum", New("tool").Positionals(0, -2), "positional maximum must be -1 or greater: -2"},
+		{"maximum below minimum", New("tool").Positionals(2, 1), "positional maximum 1 cannot be less than minimum 2"},
 		{"invalid bool default", New("tool").Bool("verbose", Default("sometimes")), `invalid default for --verbose: "sometimes"`},
 	}
 
@@ -219,6 +231,18 @@ func TestValidateRecordsDefinitionErrors(t *testing.T) {
 				t.Fatalf("expected Parse to return validation error %q, got %v", err, parseErr)
 			}
 		})
+	}
+}
+
+func TestParseUsesNormalizedAndUnicodeFlagNames(t *testing.T) {
+	spec := New("tool").String(" output ", Short('界'))
+
+	result, err := spec.Parse([]string{"--output", "long", "-界", "short"})
+	if err != nil {
+		t.Fatalf("expected valid normalized and Unicode flag names, got %v", err)
+	}
+	if got := result.String("output"); got != "short" {
+		t.Fatalf("expected short flag to set normalized name, got %q", got)
 	}
 }
 
