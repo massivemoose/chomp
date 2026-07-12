@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // New creates a command specification.
@@ -51,6 +52,15 @@ func (spec *Spec) Strings(name string, options ...FlagOption) *Spec {
 
 // Positionals declares the accepted positional count and usage names.
 func (spec *Spec) Positionals(min, max int, names ...string) *Spec {
+	if min < 0 {
+		spec.definitionErrs = append(spec.definitionErrs, fmt.Errorf("positional minimum cannot be negative: %d", min))
+	}
+	if max < -1 {
+		spec.definitionErrs = append(spec.definitionErrs, fmt.Errorf("positional maximum must be -1 or greater: %d", max))
+	}
+	if min >= 0 && max >= 0 && max < min {
+		spec.definitionErrs = append(spec.definitionErrs, fmt.Errorf("positional maximum %d cannot be less than minimum %d", max, min))
+	}
 	spec.minPositionals = min
 	spec.maxPositionals = max
 	spec.positionalNames = append([]string(nil), names...)
@@ -73,6 +83,12 @@ func (spec *Spec) flag(name string, kind flagKind, options ...FlagOption) *Spec 
 		spec.definitionErrs = append(spec.definitionErrs, errors.New("flag name cannot be empty"))
 	case flag.name == "help":
 		spec.definitionErrs = append(spec.definitionErrs, errors.New(`reserved flag "--help"`))
+	case strings.HasPrefix(flag.name, "-"):
+		spec.definitionErrs = append(spec.definitionErrs, fmt.Errorf(`flag name cannot start with "-": %q`, flag.name))
+	case strings.Contains(flag.name, "="):
+		spec.definitionErrs = append(spec.definitionErrs, fmt.Errorf(`flag name cannot contain "=": %q`, flag.name))
+	case strings.IndexFunc(flag.name, unicode.IsSpace) >= 0:
+		spec.definitionErrs = append(spec.definitionErrs, fmt.Errorf("flag name cannot contain whitespace: %q", flag.name))
 	case spec.flags[flag.name] != nil:
 		spec.definitionErrs = append(spec.definitionErrs, fmt.Errorf(`duplicate flag "--%s"`, flag.name))
 	default:
@@ -83,6 +99,8 @@ func (spec *Spec) flag(name string, kind flagKind, options ...FlagOption) *Spec 
 		switch {
 		case flag.short == 'h':
 			spec.definitionErrs = append(spec.definitionErrs, errors.New(`reserved short flag "-h"`))
+		case flag.short == '-' || flag.short == '=' || unicode.IsSpace(flag.short):
+			spec.definitionErrs = append(spec.definitionErrs, fmt.Errorf("invalid short flag %q", string(flag.short)))
 		case spec.shorts[flag.short] != nil:
 			spec.definitionErrs = append(spec.definitionErrs, fmt.Errorf(`duplicate short flag "-%c"`, flag.short))
 		default:
